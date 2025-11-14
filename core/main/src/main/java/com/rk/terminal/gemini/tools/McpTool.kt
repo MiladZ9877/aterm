@@ -60,12 +60,13 @@ open class McpTool(
     val serverName: String,
     val toolName: String,
     toolDescription: String,
-    val parameterSchema: FunctionParameters
+    schemaParam: FunctionParameters
 ) : DeclarativeTool<McpToolParams, ToolResult>() {
     
     override val name = "mcp_${serverName}_$toolName"
     override val displayName = "MCP: $serverName::$toolName"
     override val description: String = toolDescription
+    override val parameterSchema: FunctionParameters = schemaParam
     
     override fun getFunctionDeclaration(): FunctionDeclaration {
         return FunctionDeclaration(

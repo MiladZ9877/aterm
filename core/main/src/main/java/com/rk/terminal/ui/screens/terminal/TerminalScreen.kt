@@ -591,8 +591,8 @@ fun TerminalScreen(
                                                     ?: mainSession
                                             }
 
-                                            session.updateTerminalSessionClient(client)
-                                            attachSession(session)
+                                            session?.updateTerminalSessionClient(client)
+                                            session?.let { attachSession(it) }
                                             setTerminalViewClient(client)
                                             setTypeface(font)
 

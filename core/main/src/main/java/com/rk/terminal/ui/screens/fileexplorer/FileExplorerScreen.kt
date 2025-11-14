@@ -281,8 +281,8 @@ fun loadFiles(path: String): List<FileItem> {
             val isDirectory = file.isDirectory
             val isFile = file.isFile
             
-            val iconPair = when {
-                isDirectory -> Pair(Icons.Default.Folder, androidx.compose.ui.graphics.Color(0xFF2196F3))
+            val iconPair: Pair<androidx.compose.ui.graphics.vector.ImageVector, androidx.compose.ui.graphics.Color> = when {
+                isDirectory -> Pair(Icons.Default.FolderOpen, androidx.compose.ui.graphics.Color(0xFF2196F3))
                 file.name.endsWith(".txt", ignoreCase = true) ||
                 file.name.endsWith(".md", ignoreCase = true) ||
                 file.name.endsWith(".log", ignoreCase = true) -> 
@@ -295,8 +295,8 @@ fun loadFiles(path: String): List<FileItem> {
                 file.name.endsWith(".zip", ignoreCase = true) ||
                 file.name.endsWith(".tar", ignoreCase = true) ||
                 file.name.endsWith(".gz", ignoreCase = true) -> 
-                    Pair(Icons.Default.Folder, androidx.compose.ui.graphics.Color(0xFF9C27B0))
-                else -> Pair(Icons.Default.Description, androidx.compose.ui.graphics.Color(0xFF757575))
+                    Pair(Icons.Default.Archive, androidx.compose.ui.graphics.Color(0xFF9C27B0))
+                else -> Pair(Icons.Default.InsertDriveFile, androidx.compose.ui.graphics.Color(0xFF757575))
             }
             val icon = iconPair.first
             val iconColor = iconPair.second

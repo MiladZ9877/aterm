@@ -76,7 +76,7 @@ fun AgentScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Default.Psychology,
+                    imageVector = Icons.Default.AutoAwesome,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer
                 )
@@ -214,7 +214,7 @@ fun AgentScreen(
                                                     }
                                                     is GeminiStreamEvent.ToolResult -> {
                                                         val resultMessage = AgentMessage(
-                                                            text = "✅ Tool '${event.toolName}' completed: ${event.result.returnDisplay}",
+                                                            text = "✅ Tool '${event.toolName}' completed: ${(event.result as ToolResult).returnDisplay}",
                                                             isUser = false,
                                                             timestamp = System.currentTimeMillis()
                                                         )
@@ -440,7 +440,7 @@ fun WelcomeMessage() {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
-                imageVector = Icons.Default.SmartToy,
+                imageVector = Icons.Default.AutoAwesome,
                 contentDescription = null,
                 modifier = Modifier.size(64.dp),
                 tint = MaterialTheme.colorScheme.primary
@@ -481,7 +481,7 @@ fun MessageBubble(message: AgentMessage) {
     ) {
         if (!message.isUser) {
             Icon(
-                imageVector = Icons.Default.SmartToy,
+                imageVector = Icons.Default.AutoAwesome,
                 contentDescription = null,
                 modifier = Modifier
                     .size(32.dp)

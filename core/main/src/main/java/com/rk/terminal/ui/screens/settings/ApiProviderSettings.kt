@@ -11,6 +11,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.rk.components.compose.preferences.base.PreferenceGroup
 import com.rk.terminal.api.ApiKey
+import com.rk.terminal.api.ApiProvider
 import com.rk.terminal.api.ApiProviderManager
 import com.rk.terminal.api.ApiProviderType
 
