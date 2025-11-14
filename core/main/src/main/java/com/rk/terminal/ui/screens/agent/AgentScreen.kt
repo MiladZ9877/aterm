@@ -51,6 +51,7 @@ fun AgentScreen(
     var ollamaUrl by remember { mutableStateOf("http://localhost:11434") }
     var ollamaModel by remember { mutableStateOf("llama3.2") }
     var showOllamaSettings by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     
