@@ -40,11 +40,11 @@ fun applyReplacement(
 }
 
 class EditToolInvocation(
-    private val params: EditToolParams,
+    toolParams: EditToolParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<EditToolParams, ToolResult> {
     
-    override val params: EditToolParams = params
+    override val params: EditToolParams = toolParams
     
     private val resolvedPath: String
         get() = File(workspaceRoot, params.file_path).absolutePath

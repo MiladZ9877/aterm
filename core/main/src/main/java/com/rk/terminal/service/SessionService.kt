@@ -108,26 +108,17 @@ class SessionService : Service() {
         }
         
         fun getVisibleSessions(): List<String> {
-            return sessionList.keys.filter { !isHiddenSession(it) }
+            return this@SessionService.getVisibleSessions()
         }
         
         fun getSessionIdForTab(mainSessionId: String, tabType: TabType): String {
-            return when (tabType) {
-                TabType.TERMINAL -> mainSessionId
-                TabType.FILE_EXPLORER -> "${mainSessionId}_file_explorer"
-                TabType.TEXT_EDITOR -> "${mainSessionId}_text_editor"
-                TabType.AGENT -> "${mainSessionId}_agent"
-            }
+            return this@SessionService.getSessionIdForTab(mainSessionId, tabType)
         }
         
         fun getMainSessionIdFromTabId(tabSessionId: String): String? {
-            return when {
-                tabSessionId.endsWith("_file_explorer") -> tabSessionId.removeSuffix("_file_explorer")
-                tabSessionId.endsWith("_text_editor") -> tabSessionId.removeSuffix("_text_editor")
-                tabSessionId.endsWith("_agent") -> tabSessionId.removeSuffix("_agent")
-                else -> if (!isHiddenSession(tabSessionId)) tabSessionId else null
-            }
+            return this@SessionService.getMainSessionIdFromTabId(tabSessionId)
         }
+        
         fun getSession(id: String): TerminalSession? {
             return sessions[id]
         }
@@ -257,5 +248,31 @@ class SessionService : Service() {
             return "1 session running"
         }
         return "$count sessions running"
+    }
+    
+    fun isHiddenSession(id: String): Boolean {
+        return hiddenSessions.contains(id)
+    }
+    
+    fun getVisibleSessions(): List<String> {
+        return sessionList.keys.filter { !isHiddenSession(it) }
+    }
+    
+    fun getSessionIdForTab(mainSessionId: String, tabType: TabType): String {
+        return when (tabType) {
+            TabType.TERMINAL -> mainSessionId
+            TabType.FILE_EXPLORER -> "${mainSessionId}_file_explorer"
+            TabType.TEXT_EDITOR -> "${mainSessionId}_text_editor"
+            TabType.AGENT -> "${mainSessionId}_agent"
+        }
+    }
+    
+    fun getMainSessionIdFromTabId(tabSessionId: String): String? {
+        return when {
+            tabSessionId.endsWith("_file_explorer") -> tabSessionId.removeSuffix("_file_explorer")
+            tabSessionId.endsWith("_text_editor") -> tabSessionId.removeSuffix("_text_editor")
+            tabSessionId.endsWith("_agent") -> tabSessionId.removeSuffix("_agent")
+            else -> if (!isHiddenSession(tabSessionId)) tabSessionId else null
+        }
     }
 }

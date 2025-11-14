@@ -14,11 +14,11 @@ data class WriteFileToolParams(
 )
 
 class WriteFileToolInvocation(
-    private val params: WriteFileToolParams,
+    toolParams: WriteFileToolParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<WriteFileToolParams, ToolResult> {
     
-    override val params: WriteFileToolParams = params
+    override val params: WriteFileToolParams = toolParams
     
     private val resolvedPath: String
         get() = File(workspaceRoot, params.file_path).absolutePath

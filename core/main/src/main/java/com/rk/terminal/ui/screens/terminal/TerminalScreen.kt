@@ -406,9 +406,9 @@ fun TerminalScreen(
 
                         }
 
-                        mainActivityActivity.sessionBinder?.getService()?.getVisibleSessions()?.let {
+                        mainActivityActivity.sessionBinder?.getService()?.getVisibleSessions()?.let { sessionList ->
                             LazyColumn {
-                                items(it) { session_id ->
+                                items(sessionList) { session_id: String ->
                                     SelectableCard(
                                         selected = session_id == mainActivityActivity.sessionBinder?.getService()?.currentSession?.value?.first,
                                         onSelect = {

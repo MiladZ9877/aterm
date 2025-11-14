@@ -13,7 +13,7 @@ data class LSToolParams(
     val ignore: List<String>? = null
 )
 
-data class FileEntry(
+data class LSToolFileEntry(
     val name: String,
     val path: String,
     val isDirectory: Boolean,
@@ -22,11 +22,11 @@ data class FileEntry(
 )
 
 class LSToolInvocation(
-    private val params: LSToolParams,
+    toolParams: LSToolParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<LSToolParams, ToolResult> {
     
-    override val params: LSToolParams = params
+    override val params: LSToolParams = toolParams
     
     private val resolvedPath: String
         get() = File(workspaceRoot, params.dir_path).absolutePath
@@ -87,7 +87,7 @@ class LSToolInvocation(
                 }
                 .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
                 .map { file ->
-                    FileEntry(
+                    LSToolFileEntry(
                         name = file.name,
                         path = file.absolutePath,
                         isDirectory = file.isDirectory,

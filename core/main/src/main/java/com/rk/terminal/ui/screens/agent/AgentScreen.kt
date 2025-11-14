@@ -19,9 +19,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rk.terminal.api.ApiProviderManager
-import com.rk.terminal.api.KeysExhaustedException
+import com.rk.terminal.api.ApiProviderManager.KeysExhaustedException
 import com.rk.terminal.gemini.GeminiService
 import com.rk.terminal.gemini.client.GeminiStreamEvent
+import com.rk.terminal.gemini.tools.ToolResult
 import com.rk.terminal.ui.activities.terminal.MainActivity
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -75,7 +76,7 @@ fun AgentScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Default.SmartToy,
+                    imageVector = Icons.Default.Psychology,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer
                 )

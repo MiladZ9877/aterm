@@ -18,11 +18,11 @@ private const val DEFAULT_CONTEXT_FILENAME = "GEMINI.md"
 private const val MEMORY_SECTION_HEADER = "## Gemini Added Memories"
 
 class MemoryToolInvocation(
-    private val params: MemoryToolParams,
+    toolParams: MemoryToolParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<MemoryToolParams, ToolResult> {
     
-    override val params: MemoryToolParams = params
+    override val params: MemoryToolParams = toolParams
     
     private val memoryFilePath: String
         get() = File(alpineHomeDir(), DEFAULT_CONTEXT_FILENAME).absolutePath

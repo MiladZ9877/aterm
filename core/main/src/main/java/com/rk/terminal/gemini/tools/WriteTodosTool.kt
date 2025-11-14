@@ -9,10 +9,10 @@ data class WriteTodosToolParams(
 )
 
 class WriteTodosToolInvocation(
-    private val params: WriteTodosToolParams
+    toolParams: WriteTodosToolParams
 ) : ToolInvocation<WriteTodosToolParams, ToolResult> {
     
-    override val params: WriteTodosToolParams = params
+    override val params: WriteTodosToolParams = toolParams
     
     override fun getDescription(): String {
         val count = params.todos.size

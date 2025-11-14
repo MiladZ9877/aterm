@@ -1,6 +1,7 @@
 package com.rk.terminal.ui.screens.codeeditor
 
 import android.widget.EditText
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -42,7 +43,7 @@ fun CodeEditorScreen(
             },
             navigationIcon = {
                 IconButton(onClick = { showFilePicker = true }) {
-                    Icon(Icons.Default.FolderOpen, contentDescription = "Open File")
+                    Icon(Icons.Default.Folder, contentDescription = "Open File")
                 }
             },
             actions = {
@@ -56,7 +57,7 @@ fun CodeEditorScreen(
                         },
                         enabled = isModified
                     ) {
-                        Icon(Icons.Default.Save, contentDescription = "Save")
+                        Icon(Icons.Default.Done, contentDescription = "Save")
                     }
                     
                     IconButton(
@@ -206,7 +207,7 @@ fun FilePickerDialog(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                    imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Description,
                                     contentDescription = null
                                 )
                                 Text(file.name)

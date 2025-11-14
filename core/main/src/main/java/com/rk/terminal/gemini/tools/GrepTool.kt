@@ -20,11 +20,11 @@ data class GrepMatch(
 )
 
 class GrepToolInvocation(
-    private val params: GrepToolParams,
+    toolParams: GrepToolParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<GrepToolParams, ToolResult> {
     
-    override val params: GrepToolParams = params
+    override val params: GrepToolParams = toolParams
     
     override fun getDescription(): String {
         return "Searching for pattern: ${params.pattern}"

@@ -17,11 +17,11 @@ data class ReadManyFilesParams(
 )
 
 class ReadManyFilesToolInvocation(
-    private val params: ReadManyFilesParams,
+    toolParams: ReadManyFilesParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<ReadManyFilesParams, ToolResult> {
     
-    override val params: ReadManyFilesParams = params
+    override val params: ReadManyFilesParams = toolParams
     
     override fun getDescription(): String {
         val includeDesc = params.include.joinToString("`, `", prefix = "`", postfix = "`")

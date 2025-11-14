@@ -15,10 +15,10 @@ data class WebFetchToolParams(
 )
 
 class WebFetchToolInvocation(
-    private val params: WebFetchToolParams
+    toolParams: WebFetchToolParams
 ) : ToolInvocation<WebFetchToolParams, ToolResult> {
     
-    override val params: WebFetchToolParams = params
+    override val params: WebFetchToolParams = toolParams
     
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)

@@ -281,23 +281,25 @@ fun loadFiles(path: String): List<FileItem> {
             val isDirectory = file.isDirectory
             val isFile = file.isFile
             
-            val (icon, iconColor) = when {
-                isDirectory -> Icons.Default.Folder to androidx.compose.ui.graphics.Color(0xFF2196F3)
+            val iconPair = when {
+                isDirectory -> Pair(Icons.Default.Folder, androidx.compose.ui.graphics.Color(0xFF2196F3))
                 file.name.endsWith(".txt", ignoreCase = true) ||
                 file.name.endsWith(".md", ignoreCase = true) ||
                 file.name.endsWith(".log", ignoreCase = true) -> 
-                    Icons.Default.Description to androidx.compose.ui.graphics.Color(0xFF757575)
+                    Pair(Icons.Default.Description, androidx.compose.ui.graphics.Color(0xFF757575))
                 file.name.endsWith(".jpg", ignoreCase = true) ||
                 file.name.endsWith(".png", ignoreCase = true) ||
                 file.name.endsWith(".gif", ignoreCase = true) ||
                 file.name.endsWith(".webp", ignoreCase = true) -> 
-                    Icons.Default.Image to androidx.compose.ui.graphics.Color(0xFF2196F3)
+                    Pair(Icons.Default.Image, androidx.compose.ui.graphics.Color(0xFF2196F3))
                 file.name.endsWith(".zip", ignoreCase = true) ||
                 file.name.endsWith(".tar", ignoreCase = true) ||
                 file.name.endsWith(".gz", ignoreCase = true) -> 
-                    Icons.Default.Archive to androidx.compose.ui.graphics.Color(0xFF9C27B0)
-                else -> Icons.Default.InsertDriveFile to androidx.compose.ui.graphics.Color(0xFF757575)
+                    Pair(Icons.Default.Folder, androidx.compose.ui.graphics.Color(0xFF9C27B0))
+                else -> Pair(Icons.Default.Description, androidx.compose.ui.graphics.Color(0xFF757575))
             }
+            val icon = iconPair.first
+            val iconColor = iconPair.second
             
             val details = if (isDirectory) {
                 "${file.listFiles()?.size ?: 0} items"

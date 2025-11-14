@@ -13,11 +13,11 @@ data class ShellToolParams(
 )
 
 class ShellToolInvocation(
-    private val params: ShellToolParams,
+    toolParams: ShellToolParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<ShellToolParams, ToolResult> {
     
-    override val params: ShellToolParams = params
+    override val params: ShellToolParams = toolParams
     
     override fun getDescription(): String {
         var desc = params.command

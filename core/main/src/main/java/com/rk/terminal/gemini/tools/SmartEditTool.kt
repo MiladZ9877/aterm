@@ -23,11 +23,11 @@ data class ReplacementResult(
 )
 
 class SmartEditToolInvocation(
-    private val params: SmartEditToolParams,
+    toolParams: SmartEditToolParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<SmartEditToolParams, ToolResult> {
     
-    override val params: SmartEditToolParams = params
+    override val params: SmartEditToolParams = toolParams
     
     private val resolvedPath: String
         get() = File(workspaceRoot, params.file_path).absolutePath

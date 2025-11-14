@@ -253,7 +253,8 @@ class GeminiClient(
                     )
                 )
             
-            val invocation = tool.createInvocation(params)
+            @Suppress("UNCHECKED_CAST")
+            val invocation = (tool as DeclarativeTool<Any, ToolResult>).createInvocation(params as Any)
             // Execute synchronously for now (in production, use coroutines properly)
             kotlinx.coroutines.runBlocking {
                 invocation.execute(null, null)

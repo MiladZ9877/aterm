@@ -28,11 +28,11 @@ data class RipGrepMatch(
 )
 
 class RipGrepToolInvocation(
-    private val params: RipGrepToolParams,
+    toolParams: RipGrepToolParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<RipGrepToolParams, ToolResult> {
     
-    override val params: RipGrepToolParams = params
+    override val params: RipGrepToolParams = toolParams
     
     private val maxMatches = 20000
     

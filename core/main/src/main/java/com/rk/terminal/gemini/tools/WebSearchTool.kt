@@ -14,11 +14,11 @@ data class WebSearchToolParams(
 )
 
 class WebSearchToolInvocation(
-    private val params: WebSearchToolParams,
+    toolParams: WebSearchToolParams,
     private val geminiClient: GeminiClient
 ) : ToolInvocation<WebSearchToolParams, ToolResult> {
     
-    override val params: WebSearchToolParams = params
+    override val params: WebSearchToolParams = toolParams
     
     override fun getDescription(): String {
         return "Searching the web for: \"${params.query}\""

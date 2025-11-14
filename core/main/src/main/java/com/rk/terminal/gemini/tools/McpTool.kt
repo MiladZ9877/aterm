@@ -16,10 +16,10 @@ data class McpToolParams(
 )
 
 class McpToolInvocation(
-    private val params: McpToolParams
+    toolParams: McpToolParams
 ) : ToolInvocation<McpToolParams, ToolResult> {
     
-    override val params: McpToolParams = params
+    override val params: McpToolParams = toolParams
     
     override fun getDescription(): String {
         return "MCP tool: ${params.serverName}::${params.toolName}"
@@ -59,13 +59,13 @@ class McpToolInvocation(
 open class McpTool(
     val serverName: String,
     val toolName: String,
-    val description: String,
+    toolDescription: String,
     val parameterSchema: FunctionParameters
 ) : DeclarativeTool<McpToolParams, ToolResult>() {
     
     override val name = "mcp_${serverName}_$toolName"
     override val displayName = "MCP: $serverName::$toolName"
-    override val description: String = description
+    override val description: String = toolDescription
     
     override fun getFunctionDeclaration(): FunctionDeclaration {
         return FunctionDeclaration(

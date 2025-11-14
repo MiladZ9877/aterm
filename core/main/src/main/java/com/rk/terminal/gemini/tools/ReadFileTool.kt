@@ -13,11 +13,11 @@ data class ReadFileToolParams(
 )
 
 class ReadFileToolInvocation(
-    private val params: ReadFileToolParams,
+    toolParams: ReadFileToolParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<ReadFileToolParams, ToolResult> {
     
-    override val params: ReadFileToolParams = params
+    override val params: ReadFileToolParams = toolParams
     
     private val resolvedPath: String
         get() = File(workspaceRoot, params.file_path).absolutePath

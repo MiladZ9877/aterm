@@ -23,11 +23,11 @@ data class FileEntry(
 )
 
 class GlobToolInvocation(
-    private val params: GlobToolParams,
+    toolParams: GlobToolParams,
     private val workspaceRoot: String = alpineDir().absolutePath
 ) : ToolInvocation<GlobToolParams, ToolResult> {
     
-    override val params: GlobToolParams = params
+    override val params: GlobToolParams = toolParams
     
     override fun getDescription(): String {
         var desc = "'${params.pattern}'"

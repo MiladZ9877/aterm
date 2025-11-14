@@ -111,6 +111,7 @@ dependencies {
     api(libs.anrwatchdog)
     api(libs.androidx.palette)
     api(libs.accompanist.systemuicontroller)
+    api(libs.gson)
 //    api(libs.termux.shared)
 
     api(project(":core:resources"))
