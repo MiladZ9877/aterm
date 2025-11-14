@@ -31,6 +31,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
+data class AgentMessage(
+    val text: String,
+    val isUser: Boolean,
+    val timestamp: Long
+)
+
+fun formatTimestamp(timestamp: Long): String {
+    val time = java.util.Date(timestamp)
+    val format = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+    return format.format(time)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentScreen(
@@ -743,16 +755,4 @@ fun MessageBubble(message: AgentMessage) {
             )
         }
     }
-}
-
-data class AgentMessage(
-    val text: String,
-    val isUser: Boolean,
-    val timestamp: Long
-)
-
-fun formatTimestamp(timestamp: Long): String {
-    val time = java.util.Date(timestamp)
-    val format = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-    return format.format(time)
 }
