@@ -5,7 +5,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.Button
@@ -15,6 +18,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -32,6 +37,7 @@ import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import android.os.Build
 
 data class AgentMessage(
     val text: String,
@@ -217,8 +223,10 @@ fun AgentScreen(
     var workspaceRoot by remember { mutableStateOf(com.rk.libcommons.alpineDir().absolutePath) }
     var showWorkspacePicker by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
+    var showDebugDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val clipboardManager = LocalClipboardManager.current
     
     // Read Ollama settings from Settings
     val useOllama = Settings.use_ollama
@@ -295,6 +303,9 @@ fun AgentScreen(
                 }
                 IconButton(onClick = { showHistory = true }) {
                     Icon(Icons.Default.Edit, contentDescription = "History", tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+                IconButton(onClick = { showDebugDialog = true }) {
+                    Icon(Icons.Default.BugReport, contentDescription = "Debug", tint = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
             }
         }
@@ -644,6 +655,24 @@ fun AgentScreen(
             // Countdown is handled in the coroutine above
         }
     }
+    
+    // Debug Dialog
+    if (showDebugDialog) {
+        DebugDialog(
+            onDismiss = { showDebugDialog = false },
+            onCopy = { text ->
+                clipboardManager.setText(AnnotatedString(text))
+            },
+            useOllama = useOllama,
+            ollamaHost = ollamaHost,
+            ollamaPort = ollamaPort,
+            ollamaModel = ollamaModel,
+            ollamaUrl = ollamaUrl,
+            workspaceRoot = workspaceRoot,
+            messages = messages,
+            aiClient = aiClient
+        )
+    }
 }
 
 @Composable
@@ -755,6 +784,194 @@ fun WelcomeMessage() {
             )
         }
     }
+}
+
+@Composable
+fun DebugDialog(
+    onDismiss: () -> Unit,
+    onCopy: (String) -> Unit,
+    useOllama: Boolean,
+    ollamaHost: String,
+    ollamaPort: Int,
+    ollamaModel: String,
+    ollamaUrl: String,
+    workspaceRoot: String,
+    messages: List<AgentMessage>,
+    aiClient: Any
+) {
+    val debugInfo = remember(useOllama, ollamaHost, ollamaPort, ollamaModel, ollamaUrl, workspaceRoot, messages) {
+        buildString {
+            appendLine("=== Agent Debug Information ===")
+            appendLine()
+            
+            // Configuration
+            appendLine("--- Configuration ---")
+            appendLine("Provider: ${if (useOllama) "Ollama" else "Gemini"}")
+            if (useOllama) {
+                appendLine("Ollama Host: $ollamaHost")
+                appendLine("Ollama Port: $ollamaPort")
+                appendLine("Ollama Model: $ollamaModel")
+                appendLine("Ollama URL: $ollamaUrl")
+            } else {
+                try {
+                    val currentModel = ApiProviderManager.getCurrentModel()
+                    val providerType = ApiProviderManager.selectedProvider
+                    appendLine("Gemini Provider: ${providerType.displayName}")
+                    appendLine("Gemini Model: $currentModel")
+                    val providers = ApiProviderManager.getProviders()
+                    val provider = providers[providerType]
+                    val activeKeys = provider?.getActiveKeys()?.size ?: 0
+                    appendLine("Active API Keys: $activeKeys")
+                } catch (e: Exception) {
+                    appendLine("Error getting Gemini config: ${e.message}")
+                }
+            }
+            appendLine("Workspace Root: $workspaceRoot")
+            appendLine()
+            
+            // System Information
+            appendLine("--- System Information ---")
+            appendLine("Android Version: ${Build.VERSION.RELEASE}")
+            appendLine("SDK Version: ${Build.VERSION.SDK_INT}")
+            appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
+            appendLine()
+            
+            // Client Status
+            appendLine("--- Client Status ---")
+            try {
+                if (useOllama) {
+                    val ollamaClient = aiClient as? OllamaClient
+                    if (ollamaClient != null) {
+                        val history = ollamaClient.getHistory()
+                        appendLine("Ollama Client: Initialized")
+                        appendLine("Chat History Messages: ${history.size}")
+                    } else {
+                        appendLine("Ollama Client: Not initialized")
+                    }
+                } else {
+                    val geminiClient = aiClient as? GeminiClient
+                    if (geminiClient != null) {
+                        val history = geminiClient.getHistory()
+                        appendLine("Gemini Client: Initialized")
+                        appendLine("Chat History Messages: ${history.size}")
+                    } else {
+                        appendLine("Gemini Client: Not initialized")
+                    }
+                }
+            } catch (e: Exception) {
+                appendLine("Client Status Error: ${e.message}")
+            }
+            appendLine()
+            
+            // Recent Messages & Errors
+            appendLine("--- Recent Messages & Errors ---")
+            val errorMessages = messages.filter { 
+                it.text.contains("Error", ignoreCase = true) || 
+                it.text.contains("❌", ignoreCase = false) ||
+                it.text.contains("⚠️", ignoreCase = false)
+            }
+            
+            if (errorMessages.isNotEmpty()) {
+                appendLine("Error Messages Found: ${errorMessages.size}")
+                errorMessages.takeLast(5).forEachIndexed { index, msg ->
+                    appendLine("  [${index + 1}] ${formatTimestamp(msg.timestamp)}: ${msg.text.take(200)}")
+                }
+            } else {
+                appendLine("No error messages found")
+            }
+            appendLine()
+            
+            // Recent Messages Summary
+            appendLine("--- Message Summary ---")
+            appendLine("Total Messages: ${messages.size}")
+            val userMessages = messages.count { it.isUser }
+            val agentMessages = messages.count { !it.isUser }
+            appendLine("User Messages: $userMessages")
+            appendLine("Agent Messages: $agentMessages")
+            
+            if (messages.isNotEmpty()) {
+                appendLine()
+                appendLine("Last 3 Messages:")
+                messages.takeLast(3).forEach { msg ->
+                    val role = if (msg.isUser) "User" else "Agent"
+                    val preview = msg.text.take(100).replace("\n", " ")
+                    appendLine("  [$role] ${formatTimestamp(msg.timestamp)}: $preview${if (msg.text.length > 100) "..." else ""}")
+                }
+            }
+            appendLine()
+            
+            // Connection Test Info
+            appendLine("--- Connection Test ---")
+            if (useOllama) {
+                appendLine("Test URL: $ollamaUrl/api/tags")
+                appendLine("Expected: HTTP 200 with model list")
+            } else {
+                appendLine("API Endpoint: https://generativelanguage.googleapis.com/v1beta/")
+                appendLine("Note: Check API key validity in settings")
+            }
+        }
+    }
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.BugReport,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+                Text("Debug Information")
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 500.dp)
+            ) {
+                SelectionContainer {
+                    val scrollState = rememberScrollState()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(scrollState)
+                    ) {
+                        Text(
+                            text = debugInfo,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        onCopy(debugInfo)
+                        onDismiss()
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Copy All")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
+        }
+    )
 }
 
 @Composable
