@@ -83,6 +83,9 @@ class GeminiClient(
             var finishReason: String? = null
             val toolCallsToExecute = mutableListOf<Triple<FunctionCall, ToolResult, String>>() // FunctionCall, ToolResult, callId
             
+            // Collect events to emit after API call (since callbacks aren't in coroutine context)
+            val eventsToEmit = mutableListOf<GeminiStreamEvent>()
+            
             // Make API call with retry
             val result = ApiProviderManager.makeApiCallWithRetry { key ->
                 try {
@@ -93,13 +96,13 @@ class GeminiClient(
                             model, 
                             requestBody, 
                             { chunk ->
-                                // Call the callback AND emit to Flow
+                                // Call the callback and collect event to emit later
                                 onChunk(chunk)
-                                emit(GeminiStreamEvent.Chunk(chunk))
+                                eventsToEmit.add(GeminiStreamEvent.Chunk(chunk))
                             }, 
                             { functionCall ->
                                 onToolCall(functionCall)
-                                emit(GeminiStreamEvent.ToolCall(functionCall))
+                                eventsToEmit.add(GeminiStreamEvent.ToolCall(functionCall))
                                 hasToolCalls = true
                             },
                             { toolName, args ->
@@ -126,6 +129,12 @@ class GeminiClient(
                     }
                 }
             }
+            
+            // Emit collected events (chunks and tool calls) now that we're back in coroutine context
+            for (event in eventsToEmit) {
+                emit(event)
+            }
+            eventsToEmit.clear()
             
             if (result.isFailure) {
                 val error = result.exceptionOrNull()
@@ -157,7 +166,9 @@ class GeminiClient(
                     val callId = triple.third
                     
                     // Emit ToolResult event for UI
-                    emit(GeminiStreamEvent.ToolResult(functionCall.name, toolResult))
+                    // Use fully qualified name to avoid conflict with GeminiStreamEvent.ToolResult
+                    val toolsToolResult: com.rk.terminal.gemini.tools.ToolResult = toolResult
+                    emit(GeminiStreamEvent.ToolResult(functionCall.name, toolsToolResult))
                     
                     // Format response based on tool result
                     val responseContent = when {
