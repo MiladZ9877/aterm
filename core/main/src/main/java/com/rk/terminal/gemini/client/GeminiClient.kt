@@ -145,15 +145,35 @@ class GeminiClient(
                 
                 android.util.Log.d("GeminiClient", "makeApiCall: Reading response body...")
                 response.body?.let { body ->
-                    val source = body.source().buffer()
-                    var line: String?
+                    val contentLength = body.contentLength()
+                    android.util.Log.d("GeminiClient", "makeApiCall: Response body content length: $contentLength")
+                    
+                    // Read the entire body first to see what we're getting
+                    val bodyString = body.string()
+                    android.util.Log.d("GeminiClient", "makeApiCall: Response body string length: ${bodyString.length}")
+                    android.util.Log.d("GeminiClient", "makeApiCall: Response body preview (first 500 chars): ${bodyString.take(500)}")
+                    
+                    if (bodyString.isEmpty()) {
+                        android.util.Log.w("GeminiClient", "makeApiCall: Response body is empty!")
+                        return@let
+                    }
+                    
+                    // Parse as SSE (Server-Sent Events) format
+                    val lines = bodyString.lines()
+                    android.util.Log.d("GeminiClient", "makeApiCall: Total lines in response: ${lines.size}")
+                    
                     var lineCount = 0
                     var dataLineCount = 0
                     
-                    while (source.readUtf8Line().also { line = it } != null) {
+                    for (line in lines) {
                         lineCount++
-                        val trimmedLine = line?.trim()
-                        if (trimmedLine?.startsWith("data: ") == true) {
+                        val trimmedLine = line.trim()
+                        
+                        if (trimmedLine.isEmpty()) continue
+                        
+                        android.util.Log.d("GeminiClient", "makeApiCall: Line $lineCount: ${trimmedLine.take(200)}")
+                        
+                        if (trimmedLine.startsWith("data: ")) {
                             dataLineCount++
                             val jsonStr = trimmedLine.substring(6)
                             if (jsonStr == "[DONE]" || jsonStr.isEmpty()) {
@@ -162,13 +182,19 @@ class GeminiClient(
                             }
                             
                             try {
+                                android.util.Log.d("GeminiClient", "makeApiCall: Parsing JSON data line $dataLineCount")
                                 val json = JSONObject(jsonStr)
                                 android.util.Log.d("GeminiClient", "makeApiCall: Processing data line $dataLineCount")
                                 processResponse(json, onChunk, onToolCall, onToolResult)
                             } catch (e: Exception) {
                                 android.util.Log.e("GeminiClient", "makeApiCall: Failed to parse JSON on line $dataLineCount", e)
-                                android.util.Log.e("GeminiClient", "makeApiCall: JSON string: ${jsonStr.take(200)}")
+                                android.util.Log.e("GeminiClient", "makeApiCall: JSON string: ${jsonStr.take(500)}")
                             }
+                        } else if (trimmedLine.startsWith(":")) {
+                            // SSE comment line, skip
+                            android.util.Log.d("GeminiClient", "makeApiCall: Skipping SSE comment line")
+                        } else {
+                            android.util.Log.w("GeminiClient", "makeApiCall: Unexpected line format: ${trimmedLine.take(100)}")
                         }
                     }
                     android.util.Log.d("GeminiClient", "makeApiCall: Finished reading. Total lines: $lineCount, Data lines: $dataLineCount")
