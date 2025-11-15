@@ -174,11 +174,19 @@ class ReadManyFilesTool(
         properties = mapOf(
             "include" to PropertySchema(
                 type = "array",
-                description = "Glob patterns for files to include. Example: [\"*.kt\", \"src/**/*.java\"]"
+                description = "Glob patterns for files to include. Example: [\"*.kt\", \"src/**/*.java\"]",
+                items = PropertySchema(
+                    type = "string",
+                    description = "A glob pattern"
+                )
             ),
             "exclude" to PropertySchema(
                 type = "array",
-                description = "Optional. Glob patterns for files/directories to exclude."
+                description = "Optional. Glob patterns for files/directories to exclude.",
+                items = PropertySchema(
+                    type = "string",
+                    description = "A glob pattern to exclude"
+                )
             ),
             "recursive" to PropertySchema(
                 type = "boolean",

@@ -153,7 +153,11 @@ class LSTool(
             ),
             "ignore" to PropertySchema(
                 type = "array",
-                description = "Optional array of glob patterns to ignore."
+                description = "Optional array of glob patterns to ignore.",
+                items = PropertySchema(
+                    type = "string",
+                    description = "A glob pattern to ignore"
+                )
             )
         ),
         required = listOf("dir_path")

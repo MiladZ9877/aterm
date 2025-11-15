@@ -79,7 +79,11 @@ class WriteTodosTool : DeclarativeTool<WriteTodosToolParams, ToolResult>() {
         properties = mapOf(
             "todos" to PropertySchema(
                 type = "array",
-                description = "The full list of todos. This will overwrite any existing list."
+                description = "The full list of todos. This will overwrite any existing list. Each todo has 'description' (string) and 'status' (string: 'PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED').",
+                items = PropertySchema(
+                    type = "object",
+                    description = "A todo item"
+                )
             )
         ),
         required = listOf("todos")

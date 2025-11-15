@@ -66,7 +66,8 @@ class OllamaClient(
             
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    emit(GeminiStreamEvent.Error("Ollama API error: ${response.code}"))
+                    val errorBody = response.body?.string() ?: "Unknown error"
+                    emit(GeminiStreamEvent.Error("Ollama API error: ${response.code} - $errorBody"))
                     return@flow
                 }
                 
