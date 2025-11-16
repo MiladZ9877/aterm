@@ -1,6 +1,7 @@
 package com.rk.terminal.gemini.client
 
 import com.rk.libcommons.alpineDir
+import com.rk.settings.Settings
 import com.rk.terminal.api.ApiProviderManager
 import com.rk.terminal.api.ApiProviderManager.KeysExhaustedException
 import com.rk.terminal.gemini.tools.DeclarativeTool
@@ -9,6 +10,7 @@ import com.rk.terminal.gemini.tools.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -45,6 +47,13 @@ class GeminiClient(
     ): Flow<GeminiStreamEvent> = flow {
         android.util.Log.d("GeminiClient", "sendMessageStream: Starting request")
         android.util.Log.d("GeminiClient", "sendMessageStream: User message length: ${userMessage.length}")
+        
+        // Check if streaming is enabled
+        if (!Settings.enable_streaming) {
+            android.util.Log.d("GeminiClient", "sendMessageStream: Streaming disabled, using non-streaming mode")
+            emitAll(sendMessageNonStreaming(userMessage, onChunk, onToolCall, onToolResult))
+            return@flow
+        }
         
         // Add user message to history (only if it's not already a function response)
         if (userMessage.isNotEmpty() && !userMessage.startsWith("__CONTINUE__")) {
@@ -970,6 +979,256 @@ class GeminiClient(
     
     fun resetChat() {
         chatHistory.clear()
+    }
+    
+    /**
+     * Non-streaming mode: Metadata-first approach
+     * 1. First request: Generate metadata (file structure, classes, functions, imports, relationships)
+     * 2. Second request: Generate code using metadata tags
+     */
+    private suspend fun sendMessageNonStreaming(
+        userMessage: String,
+        onChunk: (String) -> Unit,
+        onToolCall: (FunctionCall) -> Unit,
+        onToolResult: (String, Map<String, Any>) -> Unit
+    ): Flow<GeminiStreamEvent> = flow {
+        android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Starting non-streaming mode")
+        
+        // Add user message to history
+        chatHistory.add(
+            Content(
+                role = "user",
+                parts = listOf(Part.TextPart(text = userMessage))
+            )
+        )
+        
+        val model = ApiProviderManager.getCurrentModel()
+        
+        // Step 1: Request metadata generation
+        val metadataPrompt = """
+            Analyze the user's request and generate a comprehensive metadata structure for all files that need to be created.
+            
+            For each file, provide:
+            - file_path: The relative path of the file
+            - classes: List of class names in this file
+            - functions: List of function names in this file
+            - imports: List of imports (use relative paths or metadata tags)
+            - metadata_tags: Unique tags for this file (e.g., "db", "auth", "api", "ui")
+            - relationships: List of files this file depends on (use metadata tags)
+            - description: Brief description of the file's purpose
+            
+            Format your response as a JSON array of file metadata objects.
+            Example format:
+            [
+              {
+                "file_path": "server.js",
+                "classes": ["Server", "Database"],
+                "functions": ["startServer", "initDB"],
+                "imports": ["./config", "./routes"],
+                "metadata_tags": ["server", "main"],
+                "relationships": ["config.js", "routes.js"],
+                "description": "Main server file"
+              }
+            ]
+            
+            User request: $userMessage
+        """.trimIndent()
+        
+        emit(GeminiStreamEvent.Chunk("📋 Generating project metadata...\n"))
+        onChunk("📋 Generating project metadata...\n")
+        
+        // Make metadata request (non-streaming, no tools)
+        val metadataRequest = buildRequest(metadataPrompt, model)
+        metadataRequest.remove("tools") // Remove tools for metadata generation
+        
+        val metadataResult = ApiProviderManager.makeApiCallWithRetry { key ->
+            try {
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val response = makeApiCallSimple(key, model, metadataRequest)
+                    Result.success(response)
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+        
+        if (metadataResult.isFailure) {
+            emit(GeminiStreamEvent.Error(metadataResult.exceptionOrNull()?.message ?: "Failed to generate metadata"))
+            return@flow
+        }
+        
+        val metadataText = metadataResult.getOrNull() ?: ""
+        emit(GeminiStreamEvent.Chunk("✅ Metadata generated\n"))
+        onChunk("✅ Metadata generated\n")
+        
+        // Parse metadata (try to extract JSON from response)
+        val metadataJson = try {
+            // Try to find JSON array in the response
+            val jsonStart = metadataText.indexOf('[')
+            val jsonEnd = metadataText.lastIndexOf(']') + 1
+            if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                JSONArray(metadataText.substring(jsonStart, jsonEnd))
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Failed to parse metadata", e)
+            null
+        }
+        
+        if (metadataJson == null) {
+            emit(GeminiStreamEvent.Error("Failed to parse metadata. Please try again or enable streaming mode."))
+            return@flow
+        }
+        
+        // Step 2: Generate code for each file using metadata
+        emit(GeminiStreamEvent.Chunk("💻 Generating code files...\n"))
+        onChunk("💻 Generating code files...\n")
+        
+        val files = mutableListOf<Pair<String, String>>() // file_path to content
+        
+        for (i in 0 until metadataJson.length()) {
+            val fileMeta = metadataJson.getJSONObject(i)
+            val filePath = fileMeta.getString("file_path")
+            val metadataTags = if (fileMeta.has("metadata_tags")) {
+                fileMeta.getJSONArray("metadata_tags").let { tags ->
+                    (0 until tags.length()).map { tags.getString(it) }
+                }
+            } else emptyList()
+            
+            val relationships = if (fileMeta.has("relationships")) {
+                fileMeta.getJSONArray("relationships").let { rels ->
+                    (0 until rels.length()).map { rels.getString(it) }
+                }
+            } else emptyList()
+            
+            // Build code generation prompt with metadata context
+            val codePrompt = """
+                Generate the complete code for file: $filePath
+            
+                Metadata:
+                - Tags: ${metadataTags.joinToString(", ")}
+                - Relationships: ${relationships.joinToString(", ")}
+                - Description: ${fileMeta.optString("description", "")}
+            
+                When referencing other files, use their metadata tags or relative paths.
+                Generate complete, working code that integrates with the related files.
+            
+                User's original request: $userMessage
+            """.trimIndent()
+            
+            // Make code generation request
+            val codeRequest = buildRequest(codePrompt, model)
+            codeRequest.remove("tools") // No tools for code generation
+            
+            val codeResult = ApiProviderManager.makeApiCallWithRetry { key ->
+                try {
+                    kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        val response = makeApiCallSimple(key, model, codeRequest)
+                        Result.success(response)
+                    }
+                } catch (e: Exception) {
+                    Result.failure(e)
+                }
+            }
+            
+            if (codeResult.isFailure) {
+                android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Failed to generate code for $filePath")
+                continue
+            }
+            
+            val codeContent = codeResult.getOrNull() ?: ""
+            // Extract code (remove markdown code blocks if present)
+            val cleanCode = codeContent
+                .replace(Regex("```[\\w]*\\n"), "")
+                .replace(Regex("```\\n?"), "")
+                .trim()
+            
+            files.add(Pair(filePath, cleanCode))
+            emit(GeminiStreamEvent.Chunk("✅ Generated: $filePath\n"))
+            onChunk("✅ Generated: $filePath\n")
+        }
+        
+        // Step 3: Create files using write_file tool
+        emit(GeminiStreamEvent.Chunk("📝 Creating files...\n"))
+        onChunk("📝 Creating files...\n")
+        
+        for ((filePath, content) in files) {
+            val functionCall = FunctionCall(
+                name = "write_file",
+                args = mapOf(
+                    "file_path" to filePath,
+                    "content" to content
+                )
+            )
+            
+            emit(GeminiStreamEvent.ToolCall(functionCall))
+            onToolCall(functionCall)
+            
+            val toolResult = try {
+                executeToolSync(functionCall.name, functionCall.args)
+            } catch (e: Exception) {
+                ToolResult(
+                    llmContent = "Error: ${e.message}",
+                    returnDisplay = "Error",
+                    error = ToolError(
+                        message = e.message ?: "Unknown error",
+                        type = ToolErrorType.EXECUTION_ERROR
+                    )
+                )
+            }
+            
+            emit(GeminiStreamEvent.ToolResult(functionCall.name, toolResult))
+            onToolResult(functionCall.name, functionCall.args)
+        }
+        
+        emit(GeminiStreamEvent.Chunk("\n✨ Project generation complete!\n"))
+        onChunk("\n✨ Project generation complete!\n")
+        emit(GeminiStreamEvent.Done)
+    }
+    
+    /**
+     * Simple API call that returns the full response text (non-streaming)
+     */
+    private suspend fun makeApiCallSimple(
+        apiKey: String,
+        model: String,
+        requestBody: JSONObject
+    ): String {
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
+        val request = Request.Builder()
+            .url(url)
+            .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string() ?: "Unknown error"
+                throw IOException("API call failed: ${response.code} - $errorBody")
+            }
+            
+            val bodyString = response.body?.string() ?: ""
+            val json = JSONObject(bodyString)
+            val candidates = json.optJSONArray("candidates")
+            
+            if (candidates != null && candidates.length() > 0) {
+                val candidate = candidates.getJSONObject(0)
+                val content = candidate.optJSONObject("content")
+                if (content != null) {
+                    val parts = content.optJSONArray("parts")
+                    if (parts != null && parts.length() > 0) {
+                        val textParts = (0 until parts.length())
+                            .mapNotNull { i ->
+                                val part = parts.getJSONObject(i)
+                                if (part.has("text")) part.getString("text") else null
+                            }
+                        return textParts.joinToString("")
+                    }
+                }
+            }
+            
+            return ""
+        }
     }
 }
 
