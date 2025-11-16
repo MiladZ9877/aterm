@@ -673,7 +673,13 @@ class GeminiClient(
             append("- **Command Execution:** Use shell tools for running shell commands.\n\n")
             
             append("# Final Reminder\n")
-            append("Your core function is efficient and safe assistance. Balance extreme conciseness with the crucial need for clarity. Always prioritize user control and project conventions. Never make assumptions about the contents of files; instead use read tools to ensure you aren't making broad assumptions. Finally, you are an agent - please keep going until the user's query is completely resolved.")
+            append("Your core function is efficient and safe assistance. Balance extreme conciseness with the crucial need for clarity. Always prioritize user control and project conventions. Never make assumptions about the contents of files; instead use read tools to ensure you aren't making broad assumptions.\n\n")
+            append("**CRITICAL: Task Completion Rules**\n")
+            append("- You are an agent - you MUST keep going until the user's query is completely resolved.\n")
+            append("- Creating a todo list with `write_todos` is PLANNING, not completion. You MUST continue executing the todos.\n")
+            append("- Do NOT return STOP after creating todos. You must continue working until all todos are completed.\n")
+            append("- Only return STOP when ALL tasks are actually finished and the user's request is fully implemented.\n")
+            append("- If you create a todo list, immediately start working on the first todo item. Do not stop after planning.")
         }
         
         request.put("systemInstruction", JSONObject().apply {
