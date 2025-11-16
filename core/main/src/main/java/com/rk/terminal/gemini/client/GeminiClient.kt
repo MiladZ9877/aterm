@@ -8,6 +8,7 @@ import com.rk.terminal.gemini.tools.DeclarativeTool
 import com.rk.terminal.gemini.core.*
 import com.rk.terminal.gemini.tools.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.emitAll
@@ -1064,25 +1065,60 @@ class GeminiClient(
         val metadataRequest = buildRequest(metadataPrompt, model)
         metadataRequest.remove("tools") // Remove tools for metadata generation
         
-        val metadataResult = ApiProviderManager.makeApiCallWithRetry { key ->
-            try {
-                android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Making metadata request...")
-                kotlinx.coroutines.withContext(Dispatchers.IO) {
-                    val response = makeApiCallSimple(key, model, metadataRequest, useLongTimeout = true)
-                    android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Metadata request completed, response length: ${response.length}")
-                    Result.success(response)
+        // Retry metadata generation with exponential backoff for 503 errors
+        var metadataResult: Result<String>? = null
+        var retryCount = 0
+        val maxRetries = 5
+        var lastError: Throwable? = null
+        
+        while (retryCount < maxRetries && metadataResult?.isSuccess != true) {
+            if (retryCount > 0) {
+                val backoffMs = minOf(1000L * (1 shl retryCount), 30000L) // Exponential backoff, max 30s
+                android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Retrying metadata request (attempt ${retryCount + 1}/$maxRetries) after ${backoffMs}ms...")
+                emit(GeminiStreamEvent.Chunk("⏳ Retrying metadata generation (attempt ${retryCount + 1}/$maxRetries)...\n"))
+                onChunk("⏳ Retrying metadata generation (attempt ${retryCount + 1}/$maxRetries)...\n")
+                kotlinx.coroutines.delay(backoffMs)
+            }
+            
+            metadataResult = ApiProviderManager.makeApiCallWithRetry { key ->
+                try {
+                    android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Making metadata request (attempt ${retryCount + 1})...")
+                    kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        val response = makeApiCallSimple(key, model, metadataRequest, useLongTimeout = true)
+                        android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Metadata request completed, response length: ${response.length}")
+                        Result.success(response)
+                    }
+                } catch (e: java.net.SocketTimeoutException) {
+                    android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Timeout generating metadata", e)
+                    lastError = e
+                    Result.failure(IOException("Request timed out. The metadata generation is taking too long.", e))
+                } catch (e: Exception) {
+                    android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Error generating metadata", e)
+                    lastError = e
+                    Result.failure(e)
                 }
-            } catch (e: java.net.SocketTimeoutException) {
-                android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Timeout generating metadata", e)
-                Result.failure(IOException("Request timed out. The metadata generation is taking too long. Try enabling streaming mode or using a simpler request.", e))
-            } catch (e: Exception) {
-                android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Error generating metadata", e)
-                Result.failure(e)
+            }
+            
+            retryCount++
+            
+            // If it's a 503/overloaded error, retry
+            if (metadataResult.isFailure) {
+                val error = metadataResult.exceptionOrNull()
+                if (error is IOException && (error.message?.contains("503", ignoreCase = true) == true || 
+                                             error.message?.contains("overloaded", ignoreCase = true) == true ||
+                                             error.message?.contains("unavailable", ignoreCase = true) == true)) {
+                    android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Got 503 error, will retry (attempt $retryCount/$maxRetries)")
+                    lastError = error
+                    continue // Retry
+                } else {
+                    // Non-retryable error, break
+                    break
+                }
             }
         }
         
-        if (metadataResult.isFailure) {
-            val error = metadataResult.exceptionOrNull()
+        if (metadataResult?.isFailure == true) {
+            val error = metadataResult.exceptionOrNull() ?: lastError
             val errorMessage = when {
                 error is IOException && error.message?.contains("timeout", ignoreCase = true) == true -> {
                     error.message ?: "Request timed out"
@@ -1090,27 +1126,14 @@ class GeminiClient(
                 error is IOException && (error.message?.contains("503", ignoreCase = true) == true || 
                                          error.message?.contains("overloaded", ignoreCase = true) == true ||
                                          error.message?.contains("unavailable", ignoreCase = true) == true) -> {
-                    "Model is temporarily overloaded. Falling back to streaming mode..."
+                    "Model is temporarily overloaded. Tried $retryCount times. Please try again in a moment."
                 }
                 error != null -> {
                     error.message ?: "Failed to generate metadata: ${error.javaClass.simpleName}"
                 }
                 else -> "Failed to generate metadata"
             }
-            android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Metadata generation failed: $errorMessage")
-            
-            // If it's a 503/overloaded error, fallback to streaming mode
-            if (error is IOException && (error.message?.contains("503", ignoreCase = true) == true || 
-                                         error.message?.contains("overloaded", ignoreCase = true) == true ||
-                                         error.message?.contains("unavailable", ignoreCase = true) == true)) {
-                android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Falling back to streaming mode due to 503 error")
-                emit(GeminiStreamEvent.Chunk("⚠️ Non-streaming mode unavailable (model overloaded). Switching to streaming mode...\n"))
-                onChunk("⚠️ Non-streaming mode unavailable (model overloaded). Switching to streaming mode...\n")
-                // Fallback to streaming mode (bypass settings check)
-                emitAll(sendMessageStreamInternal(userMessage, onChunk, onToolCall, onToolResult))
-                return@flow
-            }
-            
+            android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Metadata generation failed after $retryCount attempts: $errorMessage")
             emit(GeminiStreamEvent.Error(errorMessage))
             return@flow
         }
@@ -1179,26 +1202,61 @@ class GeminiClient(
             val codeRequest = buildRequest(codePrompt, model)
             codeRequest.remove("tools") // No tools for code generation
             
-            val codeResult = ApiProviderManager.makeApiCallWithRetry { key ->
-                try {
-                    android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Generating code for $filePath...")
-                    kotlinx.coroutines.withContext(Dispatchers.IO) {
-                        val response = makeApiCallSimple(key, model, codeRequest, useLongTimeout = true)
-                        android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Code generation completed for $filePath")
-                        Result.success(response)
+            // Retry code generation with exponential backoff for 503 errors
+            var codeResult: Result<String>? = null
+            var codeRetryCount = 0
+            val maxCodeRetries = 3
+            var codeLastError: Throwable? = null
+            
+            while (codeRetryCount < maxCodeRetries && codeResult?.isSuccess != true) {
+                if (codeRetryCount > 0) {
+                    val backoffMs = minOf(1000L * (1 shl codeRetryCount), 20000L) // Exponential backoff, max 20s
+                    android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Retrying code generation for $filePath (attempt ${codeRetryCount + 1}/$maxCodeRetries) after ${backoffMs}ms...")
+                    emit(GeminiStreamEvent.Chunk("⏳ Retrying code generation for $filePath (attempt ${codeRetryCount + 1}/$maxCodeRetries)...\n"))
+                    onChunk("⏳ Retrying code generation for $filePath (attempt ${codeRetryCount + 1}/$maxCodeRetries)...\n")
+                    kotlinx.coroutines.delay(backoffMs)
+                }
+                
+                codeResult = ApiProviderManager.makeApiCallWithRetry { key ->
+                    try {
+                        android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Generating code for $filePath (attempt ${codeRetryCount + 1})...")
+                        kotlinx.coroutines.withContext(Dispatchers.IO) {
+                            val response = makeApiCallSimple(key, model, codeRequest, useLongTimeout = true)
+                            android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Code generation completed for $filePath")
+                            Result.success(response)
+                        }
+                    } catch (e: java.net.SocketTimeoutException) {
+                        android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Timeout generating code for $filePath", e)
+                        codeLastError = e
+                        Result.failure(IOException("Request timed out while generating code for $filePath", e))
+                    } catch (e: Exception) {
+                        android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Error generating code for $filePath", e)
+                        codeLastError = e
+                        Result.failure(e)
                     }
-                } catch (e: java.net.SocketTimeoutException) {
-                    android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Timeout generating code for $filePath", e)
-                    Result.failure(IOException("Request timed out while generating code for $filePath", e))
-                } catch (e: Exception) {
-                    android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Error generating code for $filePath", e)
-                    Result.failure(e)
+                }
+                
+                codeRetryCount++
+                
+                // If it's a 503/overloaded error, retry
+                if (codeResult.isFailure) {
+                    val error = codeResult.exceptionOrNull()
+                    if (error is IOException && (error.message?.contains("503", ignoreCase = true) == true || 
+                                                 error.message?.contains("overloaded", ignoreCase = true) == true ||
+                                                 error.message?.contains("unavailable", ignoreCase = true) == true)) {
+                        android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Got 503 error for $filePath, will retry (attempt $codeRetryCount/$maxCodeRetries)")
+                        codeLastError = error
+                        continue // Retry
+                    } else {
+                        // Non-retryable error, break
+                        break
+                    }
                 }
             }
             
-            if (codeResult.isFailure) {
-                val error = codeResult.exceptionOrNull()
-                android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Failed to generate code for $filePath: ${error?.message}")
+            if (codeResult?.isFailure == true) {
+                val error = codeResult.exceptionOrNull() ?: codeLastError
+                android.util.Log.e("GeminiClient", "sendMessageNonStreaming: Failed to generate code for $filePath after $codeRetryCount attempts: ${error?.message}")
                 emit(GeminiStreamEvent.Chunk("⚠️ Failed to generate: $filePath (${error?.message ?: "Unknown error"})\n"))
                 onChunk("⚠️ Failed to generate: $filePath (${error?.message ?: "Unknown error"})\n")
                 continue
