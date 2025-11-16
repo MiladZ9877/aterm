@@ -134,5 +134,8 @@ fun Settings(modifier: Modifier = Modifier,navController: NavController,mainActi
         
         // Ollama Settings
         OllamaSettings()
+        
+        // Agent Settings
+        AgentSettings()
     }
 }
