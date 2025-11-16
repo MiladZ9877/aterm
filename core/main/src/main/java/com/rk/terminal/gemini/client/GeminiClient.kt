@@ -333,9 +333,12 @@ class GeminiClient(
                                     lastFinishReason = finishReason
                                 }
                                 // Check if this element has content (text or function calls)
-                                val candidate = json.optJSONObject("candidates")?.optJSONObject(0)
-                                if (candidate != null && candidate.has("content")) {
-                                    hasContent = true
+                                val candidates = json.optJSONArray("candidates")
+                                if (candidates != null && candidates.length() > 0) {
+                                    val candidate = candidates.optJSONObject(0)
+                                    if (candidate != null && candidate.has("content")) {
+                                        hasContent = true
+                                    }
                                 }
                             }
                             // If we have content but no finish reason, assume STOP
