@@ -15,6 +15,9 @@ import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.AddCircle
+import androidx.compose.material.icons.outlined.InsertDriveFile
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material3.Button
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -49,10 +52,18 @@ import android.os.Build
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
+data class FileDiff(
+    val filePath: String,
+    val oldContent: String,
+    val newContent: String,
+    val isNewFile: Boolean = false
+)
+
 data class AgentMessage(
     val text: String,
     val isUser: Boolean,
-    val timestamp: Long
+    val timestamp: Long,
+    val fileDiff: FileDiff? = null // Optional file diff for code changes
 )
 
 fun formatTimestamp(timestamp: Long): String {
@@ -239,6 +250,8 @@ fun AgentScreen(
     var showSessionMenu by remember { mutableStateOf(false) }
     var showTerminateDialog by remember { mutableStateOf(false) }
     var showNewSessionDialog by remember { mutableStateOf(false) }
+    // Track tool calls to extract file diffs (queue-based to handle multiple calls)
+    val toolCallQueue = remember { mutableListOf<Pair<String, Map<String, Any>>>() }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
@@ -474,7 +487,18 @@ fun AgentScreen(
                 }
             } else {
                 items(messages) { message ->
-                    MessageBubble(message = message)
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        MessageBubble(message = message)
+                        // Show diff card if message has file diff
+                        message.fileDiff?.let { diff ->
+                            CodeDiffCard(
+                                fileDiff = diff,
+                                modifier = Modifier.padding(horizontal = 8.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -601,6 +625,10 @@ fun AgentScreen(
                                                         )
                                                     }
                                                     is GeminiStreamEvent.ToolCall -> {
+                                                        // Store tool call args in queue for file diff extraction
+                                                        if (event.functionCall.name == "edit_file" || event.functionCall.name == "write_file") {
+                                                            toolCallQueue.add(Pair(event.functionCall.name, event.functionCall.args))
+                                                        }
                                                         val toolMessage = AgentMessage(
                                                             text = "🔧 Calling tool: ${event.functionCall.name}",
                                                             isUser = false,
@@ -609,10 +637,22 @@ fun AgentScreen(
                                                         messages = messages + toolMessage
                                                     }
                                                     is GeminiStreamEvent.ToolResult -> {
+                                                        // Try to extract file diff from tool result
+                                                        // Find matching tool call from queue
+                                                        val toolCallIndex = toolCallQueue.indexOfFirst { it.first == event.toolName }
+                                                        val toolArgs = if (toolCallIndex >= 0) {
+                                                            val args = toolCallQueue[toolCallIndex].second
+                                                            toolCallQueue.removeAt(toolCallIndex) // Remove after use
+                                                            args
+                                                        } else null
+                                                        
+                                                        val fileDiff = parseFileDiffFromToolResult(event.toolName, event.result, toolArgs)
+                                                        
                                                         val resultMessage = AgentMessage(
-                                                            text = "✅ Tool '${event.toolName}' completed: ${(event.result as ToolResult).returnDisplay}",
+                                                            text = "✅ Tool '${event.toolName}' completed: ${event.result.returnDisplay}",
                                                             isUser = false,
-                                                            timestamp = System.currentTimeMillis()
+                                                            timestamp = System.currentTimeMillis(),
+                                                            fileDiff = fileDiff
                                                         )
                                                         messages = messages + resultMessage
                                                     }
@@ -1544,6 +1584,318 @@ fun DebugDialog(
             }
         }
     )
+}
+
+/**
+ * Parse file diff from tool result
+ * Extracts file path and content from edit_file and write_file tool results
+ */
+fun parseFileDiffFromToolResult(toolName: String, toolResult: ToolResult, toolArgs: Map<String, Any>? = null): FileDiff? {
+    if (toolName != "edit_file" && toolName != "write_file") {
+        return null
+    }
+    
+    return try {
+        // Extract file path from tool args
+        val filePath = toolArgs?.get("file_path") as? String
+            ?: run {
+                // Try to extract from llmContent or returnDisplay
+                val content = toolResult.llmContent
+                val filePathPattern = Regex("""(?:file|File|path|Path)[:\s]+([^\s,]+)""")
+                filePathPattern.find(content)?.groupValues?.get(1)
+            } ?: return null
+        
+        // For edit_file, extract old_string and new_string from args
+        if (toolName == "edit_file" && toolArgs != null) {
+            val oldString = toolArgs["old_string"] as? String ?: ""
+            val newString = toolArgs["new_string"] as? String ?: ""
+            val isNewFile = oldString.isEmpty()
+            
+            FileDiff(
+                filePath = filePath,
+                oldContent = oldString,
+                newContent = newString,
+                isNewFile = isNewFile
+            )
+        } 
+        // For write_file, we only have new content (creates new file or overwrites)
+        else if (toolName == "write_file" && toolArgs != null) {
+            val newContent = toolArgs["content"] as? String ?: ""
+            // Check if file exists to determine if it's new
+            // Use a coroutine-safe check
+            val workspaceRoot = com.rk.libcommons.alpineDir()
+            val file = java.io.File(workspaceRoot, filePath)
+            val isNewFile = !file.exists()
+            val oldContent = if (isNewFile) {
+                ""
+            } else {
+                try {
+                    file.takeIf { it.exists() }?.readText() ?: ""
+                } catch (e: Exception) {
+                    ""
+                }
+            }
+            
+            FileDiff(
+                filePath = filePath,
+                oldContent = oldContent,
+                newContent = newContent,
+                isNewFile = isNewFile
+            )
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("AgentScreen", "Failed to parse file diff", e)
+        null
+    }
+}
+
+/**
+ * Calculate line-by-line diff between old and new content
+ */
+fun calculateLineDiff(oldContent: String, newContent: String): List<DiffLine> {
+    val oldLines = oldContent.lines()
+    val newLines = newContent.lines()
+    val diffLines = mutableListOf<DiffLine>()
+    
+    var oldIndex = 0
+    var newIndex = 0
+    
+    while (oldIndex < oldLines.size || newIndex < newLines.size) {
+        when {
+            oldIndex >= oldLines.size -> {
+                // Only new lines remain
+                diffLines.add(DiffLine(newLines[newIndex], DiffLineType.ADDED, newIndex + 1))
+                newIndex++
+            }
+            newIndex >= newLines.size -> {
+                // Only old lines remain
+                diffLines.add(DiffLine(oldLines[oldIndex], DiffLineType.REMOVED, oldIndex + 1))
+                oldIndex++
+            }
+            oldLines[oldIndex] == newLines[newIndex] -> {
+                // Lines match
+                diffLines.add(DiffLine(oldLines[oldIndex], DiffLineType.UNCHANGED, oldIndex + 1))
+                oldIndex++
+                newIndex++
+            }
+            else -> {
+                // Lines differ - show both
+                diffLines.add(DiffLine(oldLines[oldIndex], DiffLineType.REMOVED, oldIndex + 1))
+                diffLines.add(DiffLine(newLines[newIndex], DiffLineType.ADDED, newIndex + 1))
+                oldIndex++
+                newIndex++
+            }
+        }
+    }
+    
+    return diffLines
+}
+
+enum class DiffLineType {
+    ADDED,      // Green with +
+    REMOVED,    // Red with -
+    UNCHANGED   // Normal text
+}
+
+data class DiffLine(
+    val content: String,
+    val type: DiffLineType,
+    val lineNumber: Int
+)
+
+/**
+ * Beautiful code diff card component similar to Cursor AI
+ */
+@Composable
+fun CodeDiffCard(
+    fileDiff: FileDiff,
+    modifier: Modifier = Modifier
+) {
+    val diffLines = remember(fileDiff.oldContent, fileDiff.newContent) {
+        val allDiffLines = calculateLineDiff(fileDiff.oldContent, fileDiff.newContent)
+        // Show context lines (unchanged) around changes, but limit total
+        val changesOnly = allDiffLines.filter { it.type != DiffLineType.UNCHANGED }
+        if (changesOnly.size > 200) {
+            // If too many changes, show only first 200
+            changesOnly.take(200)
+        } else {
+            // Show changes with some context
+            val result = mutableListOf<DiffLine>()
+            var lastWasChange = false
+            for (i in allDiffLines.indices) {
+                val line = allDiffLines[i]
+                if (line.type != DiffLineType.UNCHANGED) {
+                    // Add context before change (up to 2 lines)
+                    if (!lastWasChange && i > 0) {
+                        val contextStart = maxOf(0, i - 2)
+                        for (j in contextStart until i) {
+                            if (allDiffLines[j].type == DiffLineType.UNCHANGED && 
+                                result.none { it.lineNumber == allDiffLines[j].lineNumber }) {
+                                result.add(allDiffLines[j])
+                            }
+                        }
+                    }
+                    result.add(line)
+                    lastWasChange = true
+                } else if (lastWasChange && result.size < 300) {
+                    // Add context after change (up to 2 lines)
+                    result.add(line)
+                    lastWasChange = false
+                }
+            }
+            result.take(300) // Limit total
+        }
+    }
+    
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(0.dp)
+        ) {
+            // File header
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (fileDiff.isNewFile) Icons.Outlined.Add else Icons.Outlined.InsertDriveFile,
+                        contentDescription = null,
+                        tint = if (fileDiff.isNewFile) 
+                            Color(0xFF4CAF50) 
+                        else 
+                            MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = fileDiff.filePath,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (fileDiff.isNewFile) {
+                        Surface(
+                            color = Color(0xFF4CAF50).copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "NEW",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF4CAF50),
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Diff content
+            if (diffLines.isEmpty()) {
+                Text(
+                    text = "No changes",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(12.dp)
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(max = 400.dp)
+                ) {
+                    diffLines.forEach { diffLine ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    when (diffLine.type) {
+                                        DiffLineType.ADDED -> Color(0xFF1E4620).copy(alpha = 0.15f)
+                                        DiffLineType.REMOVED -> Color(0xFF5C1F1F).copy(alpha = 0.15f)
+                                        DiffLineType.UNCHANGED -> Color.Transparent
+                                    }
+                                ),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            // Line number and indicator column
+                            Column(
+                                modifier = Modifier
+                                    .width(70.dp)
+                                    .background(
+                                        when (diffLine.type) {
+                                            DiffLineType.ADDED -> Color(0xFF1E4620).copy(alpha = 0.3f)
+                                            DiffLineType.REMOVED -> Color(0xFF5C1F1F).copy(alpha = 0.3f)
+                                            DiffLineType.UNCHANGED -> Color.Transparent
+                                        }
+                                    )
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                                horizontalAlignment = Alignment.End
+                            ) {
+                                Text(
+                                    text = when (diffLine.type) {
+                                        DiffLineType.ADDED -> "+"
+                                        DiffLineType.REMOVED -> "-"
+                                        DiffLineType.UNCHANGED -> " "
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when (diffLine.type) {
+                                        DiffLineType.ADDED -> Color(0xFF4CAF50)
+                                        DiffLineType.REMOVED -> Color(0xFFF44336)
+                                        DiffLineType.UNCHANGED -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                    },
+                                    fontSize = 14.sp
+                                )
+                                if (diffLine.type != DiffLineType.UNCHANGED) {
+                                    Text(
+                                        text = diffLine.lineNumber.toString(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                            
+                            // Code content
+                            SelectionContainer {
+                                Text(
+                                    text = diffLine.content,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = when (diffLine.type) {
+                                        DiffLineType.ADDED -> Color(0xFF81C784)
+                                        DiffLineType.REMOVED -> Color(0xFFE57373)
+                                        DiffLineType.UNCHANGED -> MaterialTheme.colorScheme.onSurface
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(vertical = 2.dp, horizontal = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

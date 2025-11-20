@@ -8,16 +8,43 @@ import com.rk.libcommons.application
 import com.rk.terminal.ui.screens.agent.AgentMessage
 import java.lang.reflect.Type
 
+data class SerializableFileDiff(
+    val filePath: String,
+    val oldContent: String,
+    val newContent: String,
+    val isNewFile: Boolean = false
+) {
+    fun toFileDiff(): com.rk.terminal.ui.screens.agent.FileDiff = 
+        com.rk.terminal.ui.screens.agent.FileDiff(filePath, oldContent, newContent, isNewFile)
+    
+    companion object {
+        fun fromFileDiff(diff: com.rk.terminal.ui.screens.agent.FileDiff?): SerializableFileDiff? {
+            return diff?.let { SerializableFileDiff(it.filePath, it.oldContent, it.newContent, it.isNewFile) }
+        }
+    }
+}
+
 data class SerializableAgentMessage(
     val text: String,
     val isUser: Boolean,
-    val timestamp: Long
+    val timestamp: Long,
+    val fileDiff: SerializableFileDiff? = null
 ) {
-    fun toAgentMessage(): AgentMessage = AgentMessage(text, isUser, timestamp)
+    fun toAgentMessage(): AgentMessage = AgentMessage(
+        text = text,
+        isUser = isUser,
+        timestamp = timestamp,
+        fileDiff = fileDiff?.toFileDiff()
+    )
     
     companion object {
         fun fromAgentMessage(msg: AgentMessage): SerializableAgentMessage {
-            return SerializableAgentMessage(msg.text, msg.isUser, msg.timestamp)
+            return SerializableAgentMessage(
+                text = msg.text,
+                isUser = msg.isUser,
+                timestamp = msg.timestamp,
+                fileDiff = SerializableFileDiff.fromFileDiff(msg.fileDiff)
+            )
         }
     }
 }
