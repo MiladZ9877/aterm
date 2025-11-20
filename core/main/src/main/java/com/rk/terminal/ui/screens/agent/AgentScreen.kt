@@ -1653,39 +1653,84 @@ fun parseFileDiffFromToolResult(toolName: String, toolResult: ToolResult, toolAr
 
 /**
  * Calculate line-by-line diff between old and new content
+ * Uses a simple line-by-line comparison algorithm
  */
 fun calculateLineDiff(oldContent: String, newContent: String): List<DiffLine> {
-    val oldLines = oldContent.lines()
-    val newLines = newContent.lines()
+    val oldLines = if (oldContent.isEmpty()) emptyList() else oldContent.lines()
+    val newLines = if (newContent.isEmpty()) emptyList() else newContent.lines()
     val diffLines = mutableListOf<DiffLine>()
     
+    // If both are empty, return empty
+    if (oldLines.isEmpty() && newLines.isEmpty()) {
+        return emptyList()
+    }
+    
+    // If old is empty, all new lines are additions
+    if (oldLines.isEmpty()) {
+        newLines.forEachIndexed { index, line ->
+            diffLines.add(DiffLine(line, DiffLineType.ADDED, index + 1))
+        }
+        return diffLines
+    }
+    
+    // If new is empty, all old lines are removals
+    if (newLines.isEmpty()) {
+        oldLines.forEachIndexed { index, line ->
+            diffLines.add(DiffLine(line, DiffLineType.REMOVED, index + 1))
+        }
+        return diffLines
+    }
+    
+    // Use a simple longest common subsequence approach
     var oldIndex = 0
     var newIndex = 0
+    var newLineNumber = 1
     
     while (oldIndex < oldLines.size || newIndex < newLines.size) {
         when {
             oldIndex >= oldLines.size -> {
-                // Only new lines remain
-                diffLines.add(DiffLine(newLines[newIndex], DiffLineType.ADDED, newIndex + 1))
+                // Only new lines remain - all additions
+                diffLines.add(DiffLine(newLines[newIndex], DiffLineType.ADDED, newLineNumber))
                 newIndex++
+                newLineNumber++
             }
             newIndex >= newLines.size -> {
-                // Only old lines remain
+                // Only old lines remain - all removals
                 diffLines.add(DiffLine(oldLines[oldIndex], DiffLineType.REMOVED, oldIndex + 1))
                 oldIndex++
             }
             oldLines[oldIndex] == newLines[newIndex] -> {
-                // Lines match
+                // Lines match - unchanged
                 diffLines.add(DiffLine(oldLines[oldIndex], DiffLineType.UNCHANGED, oldIndex + 1))
                 oldIndex++
                 newIndex++
+                newLineNumber++
             }
             else -> {
-                // Lines differ - show both
-                diffLines.add(DiffLine(oldLines[oldIndex], DiffLineType.REMOVED, oldIndex + 1))
-                diffLines.add(DiffLine(newLines[newIndex], DiffLineType.ADDED, newIndex + 1))
-                oldIndex++
-                newIndex++
+                // Lines differ - check if we can find a match ahead
+                var foundMatch = false
+                var lookAhead = 1
+                while (oldIndex + lookAhead < oldLines.size && !foundMatch) {
+                    if (oldLines[oldIndex + lookAhead] == newLines[newIndex]) {
+                        // Found match ahead - mark intermediate old lines as removed
+                        for (i in oldIndex until oldIndex + lookAhead) {
+                            diffLines.add(DiffLine(oldLines[i], DiffLineType.REMOVED, i + 1))
+                        }
+                        oldIndex += lookAhead
+                        foundMatch = true
+                    } else {
+                        lookAhead++
+                    }
+                }
+                
+                if (!foundMatch) {
+                    // No match found - treat as remove + add
+                    diffLines.add(DiffLine(oldLines[oldIndex], DiffLineType.REMOVED, oldIndex + 1))
+                    diffLines.add(DiffLine(newLines[newIndex], DiffLineType.ADDED, newLineNumber))
+                    oldIndex++
+                    newIndex++
+                    newLineNumber++
+                }
             }
         }
     }
