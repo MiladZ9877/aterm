@@ -239,6 +239,711 @@ fun DirectoryPickerDialog(
     )
 }
 
+/**
+ * Parse file diff from tool result
+ * Extracts file path and content from edit_file and write_file tool results
+ */
+fun parseFileDiffFromToolResult(toolName: String, toolResult: ToolResult, toolArgs: Map<String, Any>? = null): FileDiff? {
+    if (toolName != "edit_file" && toolName != "write_file") {
+        return null
+    }
+    
+    return try {
+        // Extract file path from tool args
+        val filePath = toolArgs?.get("file_path") as? String
+            ?: run {
+                // Try to extract from llmContent or returnDisplay
+                val content = toolResult.llmContent
+                val filePathPattern = Regex("""(?:file|File|path|Path)[:\s]+([^\s,]+)""")
+                filePathPattern.find(content)?.groupValues?.get(1)
+            } ?: return null
+        
+        // For edit_file, extract old_string and new_string from args
+        if (toolName == "edit_file" && toolArgs != null) {
+            val oldString = toolArgs["old_string"] as? String ?: ""
+            val newString = toolArgs["new_string"] as? String ?: ""
+            val isNewFile = oldString.isEmpty()
+            
+            FileDiff(
+                filePath = filePath,
+                oldContent = oldString,
+                newContent = newString,
+                isNewFile = isNewFile
+            )
+        } 
+        // For write_file, we only have new content (creates new file or overwrites)
+        else if (toolName == "write_file" && toolArgs != null) {
+            val newContent = toolArgs["content"] as? String ?: ""
+            // Check if file exists to determine if it's new
+            // Use a coroutine-safe check
+            val workspaceRoot = com.rk.libcommons.alpineDir()
+            val file = java.io.File(workspaceRoot, filePath)
+            val isNewFile = !file.exists()
+            val oldContent = if (isNewFile) {
+                ""
+            } else {
+                try {
+                    file.takeIf { it.exists() }?.readText() ?: ""
+                } catch (e: Exception) {
+                    ""
+                }
+            }
+            
+            FileDiff(
+                filePath = filePath,
+                oldContent = oldContent,
+                newContent = newContent,
+                isNewFile = isNewFile
+            )
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("AgentScreen", "Failed to parse file diff", e)
+        null
+    }
+}
+
+/**
+ * Calculate line-by-line diff between old and new content
+ * Uses a simple line-by-line comparison algorithm
+ */
+fun calculateLineDiff(oldContent: String, newContent: String): List<DiffLine> {
+    val oldLines = if (oldContent.isEmpty()) emptyList() else oldContent.lines()
+    val newLines = if (newContent.isEmpty()) emptyList() else newContent.lines()
+    val diffLines = mutableListOf<DiffLine>()
+    
+    // If both are empty, return empty
+    if (oldLines.isEmpty() && newLines.isEmpty()) {
+        return emptyList()
+    }
+    
+    // If old is empty, all new lines are additions
+    if (oldLines.isEmpty()) {
+        newLines.forEachIndexed { index, line ->
+            diffLines.add(DiffLine(line, DiffLineType.ADDED, index + 1))
+        }
+        return diffLines
+    }
+    
+    // If new is empty, all old lines are removals
+    if (newLines.isEmpty()) {
+        oldLines.forEachIndexed { index, line ->
+            diffLines.add(DiffLine(line, DiffLineType.REMOVED, index + 1))
+        }
+        return diffLines
+    }
+    
+    // Use a simple longest common subsequence approach
+    var oldIndex = 0
+    var newIndex = 0
+    var newLineNumber = 1
+    
+    while (oldIndex < oldLines.size || newIndex < newLines.size) {
+        when {
+            oldIndex >= oldLines.size -> {
+                // Only new lines remain - all additions
+                diffLines.add(DiffLine(newLines[newIndex], DiffLineType.ADDED, newLineNumber))
+                newIndex++
+                newLineNumber++
+            }
+            newIndex >= newLines.size -> {
+                // Only old lines remain - all removals
+                diffLines.add(DiffLine(oldLines[oldIndex], DiffLineType.REMOVED, oldIndex + 1))
+                oldIndex++
+            }
+            oldLines[oldIndex] == newLines[newIndex] -> {
+                // Lines match - unchanged
+                diffLines.add(DiffLine(oldLines[oldIndex], DiffLineType.UNCHANGED, oldIndex + 1))
+                oldIndex++
+                newIndex++
+                newLineNumber++
+            }
+            else -> {
+                // Lines differ - check if we can find a match ahead
+                var foundMatch = false
+                var lookAhead = 1
+                while (oldIndex + lookAhead < oldLines.size && !foundMatch) {
+                    if (oldLines[oldIndex + lookAhead] == newLines[newIndex]) {
+                        // Found match ahead - mark intermediate old lines as removed
+                        for (i in oldIndex until oldIndex + lookAhead) {
+                            diffLines.add(DiffLine(oldLines[i], DiffLineType.REMOVED, i + 1))
+                        }
+                        oldIndex += lookAhead
+                        foundMatch = true
+                    } else {
+                        lookAhead++
+                    }
+                }
+                
+                if (!foundMatch) {
+                    // No match found - treat as remove + add
+                    diffLines.add(DiffLine(oldLines[oldIndex], DiffLineType.REMOVED, oldIndex + 1))
+                    diffLines.add(DiffLine(newLines[newIndex], DiffLineType.ADDED, newLineNumber))
+                    oldIndex++
+                    newIndex++
+                    newLineNumber++
+                }
+            }
+        }
+    }
+    
+    return diffLines
+}
+
+@Composable
+fun WelcomeMessage() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = Icons.Default.Star,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Welcome to Gemini AI Agent",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "This agent will be integrated with gemini-cli to provide AI-powered assistance for your terminal workflow.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Features coming soon:",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "• Code generation and assistance\n• Terminal command suggestions\n• File operations guidance\n• Project analysis and recommendations",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * Beautiful code diff card component similar to Cursor AI
+ */
+@Composable
+fun CodeDiffCard(
+    fileDiff: FileDiff,
+    modifier: Modifier = Modifier
+) {
+    val diffLines = remember(fileDiff.oldContent, fileDiff.newContent) {
+        val allDiffLines = calculateLineDiff(fileDiff.oldContent, fileDiff.newContent)
+        // Show context lines (unchanged) around changes, but limit total
+        val changesOnly = allDiffLines.filter { it.type != DiffLineType.UNCHANGED }
+        if (changesOnly.size > 200) {
+            // If too many changes, show only first 200
+            changesOnly.take(200)
+        } else {
+            // Show changes with some context
+            val result = mutableListOf<DiffLine>()
+            var lastWasChange = false
+            for (i in allDiffLines.indices) {
+                val line = allDiffLines[i]
+                if (line.type != DiffLineType.UNCHANGED) {
+                    // Add context before change (up to 2 lines)
+                    if (!lastWasChange && i > 0) {
+                        val contextStart = maxOf(0, i - 2)
+                        for (j in contextStart until i) {
+                            if (allDiffLines[j].type == DiffLineType.UNCHANGED && 
+                                result.none { it.lineNumber == allDiffLines[j].lineNumber }) {
+                                result.add(allDiffLines[j])
+                            }
+                        }
+                    }
+                    result.add(line)
+                    lastWasChange = true
+                } else if (lastWasChange && result.size < 300) {
+                    // Add context after change (up to 2 lines)
+                    result.add(line)
+                    lastWasChange = false
+                }
+            }
+            result.take(300) // Limit total
+        }
+    }
+    
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(0.dp)
+        ) {
+            // File header
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (fileDiff.isNewFile) Icons.Outlined.Add else Icons.Outlined.InsertDriveFile,
+                        contentDescription = null,
+                        tint = if (fileDiff.isNewFile) 
+                            Color(0xFF4CAF50) 
+                        else 
+                            MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = fileDiff.filePath,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (fileDiff.isNewFile) {
+                        Surface(
+                            color = Color(0xFF4CAF50).copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "NEW",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF4CAF50),
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Diff content
+            if (diffLines.isEmpty()) {
+                Text(
+                    text = "No changes",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(12.dp)
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(max = 400.dp)
+                ) {
+                    diffLines.forEach { diffLine ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    when (diffLine.type) {
+                                        DiffLineType.ADDED -> Color(0xFF1E4620).copy(alpha = 0.15f)
+                                        DiffLineType.REMOVED -> Color(0xFF5C1F1F).copy(alpha = 0.15f)
+                                        DiffLineType.UNCHANGED -> Color.Transparent
+                                    }
+                                ),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            // Line number and indicator column
+                            Column(
+                                modifier = Modifier
+                                    .width(70.dp)
+                                    .background(
+                                        when (diffLine.type) {
+                                            DiffLineType.ADDED -> Color(0xFF1E4620).copy(alpha = 0.3f)
+                                            DiffLineType.REMOVED -> Color(0xFF5C1F1F).copy(alpha = 0.3f)
+                                            DiffLineType.UNCHANGED -> Color.Transparent
+                                        }
+                                    )
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                                horizontalAlignment = Alignment.End
+                            ) {
+                                Text(
+                                    text = when (diffLine.type) {
+                                        DiffLineType.ADDED -> "+"
+                                        DiffLineType.REMOVED -> "-"
+                                        DiffLineType.UNCHANGED -> " "
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when (diffLine.type) {
+                                        DiffLineType.ADDED -> Color(0xFF4CAF50)
+                                        DiffLineType.REMOVED -> Color(0xFFF44336)
+                                        DiffLineType.UNCHANGED -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                    },
+                                    fontSize = 14.sp
+                                )
+                                if (diffLine.type != DiffLineType.UNCHANGED) {
+                                    Text(
+                                        text = diffLine.lineNumber.toString(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                            
+                            // Code content
+                            SelectionContainer {
+                                Text(
+                                    text = diffLine.content,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = when (diffLine.type) {
+                                        DiffLineType.ADDED -> Color(0xFF81C784)
+                                        DiffLineType.REMOVED -> Color(0xFFE57373)
+                                        DiffLineType.UNCHANGED -> MaterialTheme.colorScheme.onSurface
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(vertical = 2.dp, horizontal = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MessageBubble(message: AgentMessage) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (message.isUser) Arrangement.End else Arrangement.Start
+    ) {
+        if (!message.isUser) {
+            Icon(
+                imageVector = Icons.Default.Star,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(32.dp)
+                    .padding(end = 8.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+        
+        Card(
+            modifier = Modifier
+                .widthIn(max = 280.dp)
+                .padding(vertical = 4.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (message.isUser) 
+                    MaterialTheme.colorScheme.primaryContainer 
+                else 
+                    MaterialTheme.colorScheme.surfaceContainerHighest
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp)
+            ) {
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (message.isUser) 
+                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = formatTimestamp(message.timestamp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (message.isUser) 
+                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontSize = 10.sp
+                )
+            }
+        }
+        
+        if (message.isUser) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.Default.Person,
+                contentDescription = null,
+                modifier = Modifier.size(32.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+    }
+}
+
+@Composable
+fun KeysExhaustedDialog(
+    onDismiss: () -> Unit,
+    onWaitAndRetry: (Int) -> Unit
+) {
+    var waitSeconds by remember { mutableStateOf(60) }
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("API Keys Exhausted") },
+        text = {
+            Column {
+                Text("All API keys are rate limited. You can:")
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("1. Wait and retry after a delay")
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Wait for:")
+                    OutlinedTextField(
+                        value = waitSeconds.toString(),
+                        onValueChange = { 
+                            it.toIntOrNull()?.let { secs -> 
+                                if (secs >= 0 && secs <= 3600) waitSeconds = secs 
+                            }
+                        },
+                        modifier = Modifier.width(80.dp),
+                        label = { Text("seconds") }
+                    )
+                    Text("seconds")
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onWaitAndRetry(waitSeconds) }) {
+                Text("Wait and Retry")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+/**
+ * Read recent logcat entries filtered by relevant tags
+ */
+suspend fun readLogcatLogs(maxLines: Int = 200): String = withContext(Dispatchers.IO) {
+    try {
+        // Read more lines than needed, then filter
+        val process = Runtime.getRuntime().exec(
+            arrayOf(
+                "logcat",
+                "-d", // dump and exit
+                "-t", (maxLines * 3).toString(), // read more lines to filter from
+                "-v", "time" // time format
+            )
+        )
+        
+        val reader = BufferedReader(InputStreamReader(process.inputStream))
+        val logs = StringBuilder()
+        var line: String?
+        var lineCount = 0
+        
+        // Relevant tags to filter for
+        val relevantTags = listOf(
+            "GeminiClient", "OllamaClient", "AgentScreen", "ApiProviderManager",
+            "GeminiService", "OkHttp", "Okio", "AndroidRuntime", "ApiProvider",
+            "OkHttpClient", "OkHttp3", "Okio", "System.err"
+        )
+        
+        while (reader.readLine().also { line = it } != null && lineCount < maxLines) {
+            line?.let { logLine ->
+                // Check if line contains relevant tags or is an error/warning
+                val containsRelevantTag = relevantTags.any { tag ->
+                    logLine.contains(tag, ignoreCase = true)
+                }
+                
+                // Check for error/warning indicators
+                val isErrorOrWarning = logLine.matches(Regex(".*\\s+[EW]\\s+.*")) ||
+                        logLine.contains("Error", ignoreCase = true) ||
+                        logLine.contains("Exception", ignoreCase = true) ||
+                        logLine.contains("IOException", ignoreCase = true) ||
+                        logLine.contains("Network", ignoreCase = true) ||
+                        logLine.contains("HTTP", ignoreCase = true) ||
+                        logLine.contains("Failed", ignoreCase = true) ||
+                        logLine.contains("Timeout", ignoreCase = true) ||
+                        logLine.contains("streamGenerateContent", ignoreCase = true) ||
+                        logLine.contains("generativelanguage", ignoreCase = true) ||
+                        logLine.contains("API", ignoreCase = true) ||
+                        logLine.contains("api", ignoreCase = true)
+                
+                if (containsRelevantTag || isErrorOrWarning) {
+                    logs.appendLine(logLine)
+                    lineCount++
+                }
+            }
+        }
+        
+        process.waitFor()
+        reader.close()
+        
+        // Also read error stream in case of issues
+        val errorReader = BufferedReader(InputStreamReader(process.errorStream))
+        val errorOutput = StringBuilder()
+        while (errorReader.readLine().also { line = it } != null) {
+            errorOutput.appendLine(line)
+        }
+        errorReader.close()
+        
+        if (logs.isEmpty()) {
+            if (errorOutput.isNotEmpty()) {
+                "No relevant logcat entries found.\nLogcat error: ${errorOutput.toString().take(200)}"
+            } else {
+                "No relevant logcat entries found (checked last ${maxLines * 3} lines).\nTry increasing the filter or check if logcat is accessible."
+            }
+        } else {
+            logs.toString()
+        }
+    } catch (e: Exception) {
+        "Error reading logcat: ${e.message}\n${e.stackTraceToString().take(500)}"
+    }
+}
+
+@Composable
+fun DebugDialog(
+    onDismiss: () -> Unit,
+    onCopy: (String) -> Unit,
+    useOllama: Boolean,
+    ollamaHost: String,
+    ollamaPort: Int,
+    ollamaModel: String,
+    ollamaUrl: String,
+    workspaceRoot: String,
+    messages: List<AgentMessage>,
+    aiClient: Any
+) {
+    var logcatLogs by remember { mutableStateOf<String?>(null) }
+    var isLoadingLogs by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    
+    // Load logcat logs when dialog opens
+    LaunchedEffect(Unit) {
+        isLoadingLogs = true
+        logcatLogs = readLogcatLogs(200)
+        isLoadingLogs = false
+    }
+    
+    val debugInfo = remember(useOllama, ollamaHost, ollamaPort, ollamaModel, ollamaUrl, workspaceRoot, messages, logcatLogs) {
+        buildString {
+            appendLine("=== Agent Debug Information ===")
+            appendLine()
+            
+            // Configuration
+            appendLine("--- Configuration ---")
+            appendLine("Provider: ${if (useOllama) "Ollama" else "Gemini"}")
+            if (useOllama) {
+                appendLine("Host: $ollamaHost")
+                appendLine("Port: $ollamaPort")
+                appendLine("Model: $ollamaModel")
+                appendLine("URL: $ollamaUrl")
+            }
+            appendLine("Workspace Root: $workspaceRoot")
+            appendLine()
+            
+            // Messages
+            appendLine("--- Messages (${messages.size}) ---")
+            messages.takeLast(10).forEachIndexed { index, msg ->
+                appendLine("${index + 1}. [${if (msg.isUser) "User" else "AI"}] ${msg.text.take(100)}")
+            }
+            appendLine()
+            
+            // Logcat
+            appendLine("--- Recent Logcat (filtered) ---")
+            appendLine(logcatLogs ?: "Loading...")
+        }
+    }
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Debug Information") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+            ) {
+                if (isLoadingLogs) {
+                    CircularProgressIndicator()
+                } else {
+                    SelectionContainer {
+                        Text(
+                            text = debugInfo,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            isLoadingLogs = true
+                            logcatLogs = readLogcatLogs(200)
+                            isLoadingLogs = false
+                        }
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Refresh Logs")
+                }
+                Button(
+                    onClick = {
+                        onCopy(debugInfo)
+                        onDismiss()
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Copy All")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
+        }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentScreen(
@@ -1167,128 +1872,6 @@ fun AgentScreen(
         )
     }
 }
-
-@Composable
-fun KeysExhaustedDialog(
-    onDismiss: () -> Unit,
-    onWaitAndRetry: (Int) -> Unit
-) {
-    var waitSeconds by remember { mutableStateOf(60) }
-    
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Warning,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-                Text("Keys are Exhausted")
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text(
-                    "All API keys are rate limited. You can wait and retry, or add more API keys in settings.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Wait for:")
-                    OutlinedTextField(
-                        value = waitSeconds.toString(),
-                        onValueChange = { 
-                            it.toIntOrNull()?.let { seconds ->
-                                if (seconds >= 0) waitSeconds = seconds
-                            }
-                        },
-                        modifier = Modifier.width(100.dp),
-                        label = { Text("Seconds") }
-                    )
-                    Text("seconds")
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onWaitAndRetry(waitSeconds) }
-            ) {
-                Text("Wait and Retry")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        }
-    )
-}
-
-@Composable
-fun WelcomeMessage() {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                imageVector = Icons.Default.Star,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Welcome to Gemini AI Agent",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "This agent will be integrated with gemini-cli to provide AI-powered assistance for your terminal workflow.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Features coming soon:",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "• Code generation and assistance\n• Terminal command suggestions\n• File operations guidance\n• Project analysis and recommendations",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-/**
- * Read recent logcat entries filtered by relevant tags
- */
-suspend fun readLogcatLogs(maxLines: Int = 200): String = withContext(Dispatchers.IO) {
-    try {
-        // Read more lines than needed, then filter
-        val process = Runtime.getRuntime().exec(
-            arrayOf(
-                "logcat",
-                "-d", // dump and exit
                 "-t", (maxLines * 3).toString(), // read more lines to filter from
                 "-v", "time" // time format
             )
