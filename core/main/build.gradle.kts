@@ -35,7 +35,7 @@ fun getFullGitCommitHash(): String {
 
 
 android {
-    namespace = "com.rk.terminal"
+    namespace = "com.qali.aterm"
     android.buildFeatures.buildConfig = true
     compileSdk = 35
 

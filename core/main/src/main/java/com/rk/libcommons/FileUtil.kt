@@ -2,14 +2,14 @@ package com.rk.libcommons
 
 import android.content.Context
 import java.io.File
-import com.rk.terminal.BuildConfig
+import com.qali.aterm.BuildConfig
 
 private fun getFilesDir(): File{
     return if (application == null){
         if (BuildConfig.DEBUG){
-            File("/data/data/com.rk.terminal.debug/files")
+            File("/data/data/com.qali.aterm.debug/files")
         }else{
-            File("/data/data/com.rk.terminal/files")
+            File("/data/data/com.qali.aterm/files")
         }
     }else{
         application!!.filesDir

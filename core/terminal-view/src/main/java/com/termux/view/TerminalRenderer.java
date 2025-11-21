@@ -21,6 +21,7 @@ public final class TerminalRenderer {
     final int mTextSize;
     final Typeface mTypeface;
     private final Paint mTextPaint = new Paint();
+    private final Paint mSelectionPaint = new Paint();
 
     /** The width of a single mono spaced character obtained by {@link Paint#measureText(String)} on a single 'X'. */
     final float mFontWidth;
@@ -40,6 +41,11 @@ public final class TerminalRenderer {
         mTextPaint.setTypeface(typeface);
         mTextPaint.setAntiAlias(true);
         mTextPaint.setTextSize(textSize);
+
+        mSelectionPaint.setAntiAlias(true);
+        // Default selection color: semi-transparent blue for light theme, semi-transparent white for dark theme
+        // This will be overridden based on theme detection
+        mSelectionPaint.setColor(0x800000FF); // Semi-transparent blue
 
         mFontLineSpacing = (int) Math.ceil(mTextPaint.getFontSpacing());
         mFontAscent = (int) Math.ceil(mTextPaint.ascent());
@@ -65,6 +71,17 @@ public final class TerminalRenderer {
         final TerminalBuffer screen = mEmulator.getScreen();
         final int[] palette = mEmulator.mColors.mCurrentColors;
         final int cursorShape = mEmulator.getCursorStyle();
+        
+        // Detect if we're in light or dark theme based on background color
+        final int backgroundColor = palette[TextStyle.COLOR_INDEX_BACKGROUND];
+        final boolean isLightTheme = ((backgroundColor >> 16) & 0xFF) + ((backgroundColor >> 8) & 0xFF) + (backgroundColor & 0xFF) > 384;
+        
+        // Set selection color based on theme: semi-transparent blue for light, semi-transparent white for dark
+        if (isLightTheme) {
+            mSelectionPaint.setColor(0x800000FF); // Semi-transparent blue for light theme
+        } else {
+            mSelectionPaint.setColor(0x80FFFFFF); // Semi-transparent white for dark theme
+        }
 
         if (reverseVideo)
             canvas.drawColor(palette[TextStyle.COLOR_INDEX_FOREGROUND], PorterDuff.Mode.SRC);
@@ -124,7 +141,7 @@ public final class TerminalRenderer {
                         }
                         drawTextRun(canvas, line, palette, heightOffset, lastRunStartColumn, columnWidthSinceLastRun,
                             lastRunStartIndex, charsSinceLastRun, measuredWidthForRun,
-                            cursorColor, cursorShape, lastRunStyle, reverseVideo || invertCursorTextColor || lastRunInsideSelection);
+                            cursorColor, cursorShape, lastRunStyle, reverseVideo || invertCursorTextColor, lastRunInsideSelection);
                     }
                     measuredWidthForRun = 0.f;
                     lastRunStyle = style;
@@ -152,13 +169,35 @@ public final class TerminalRenderer {
                 invertCursorTextColor = true;
             }
             drawTextRun(canvas, line, palette, heightOffset, lastRunStartColumn, columnWidthSinceLastRun, lastRunStartIndex, charsSinceLastRun,
-                measuredWidthForRun, cursorColor, cursorShape, lastRunStyle, reverseVideo || invertCursorTextColor || lastRunInsideSelection);
+                measuredWidthForRun, cursorColor, cursorShape, lastRunStyle, reverseVideo || invertCursorTextColor, lastRunInsideSelection);
+        }
+        
+        // Draw selection overlay after all text is drawn for better visibility
+        if (selectionY1 >= 0 && selectionY2 >= selectionY1 && selectionX1 >= 0 && selectionX2 >= selectionX1) {
+            // Calculate selection rectangle coordinates based on row positions
+            float selectionTop = (selectionY1 - topRow + 1) * mFontLineSpacing + mFontLineSpacingAndAscent - mFontLineSpacing;
+            float selectionBottom = (selectionY2 - topRow + 2) * mFontLineSpacing + mFontLineSpacingAndAscent - mFontLineSpacing;
+            float selectionLeft = selectionX1 * mFontWidth;
+            float selectionRight = (selectionX2 + 1) * mFontWidth;
+            
+            // Adjust for last row
+            if (selectionY2 >= endRow - 1) {
+                selectionBottom = (selectionY2 - topRow + 1) * mFontLineSpacing + mFontLineSpacingAndAscent;
+            }
+            
+            float topY = selectionTop - mFontLineSpacingAndAscent + mFontAscent;
+            float bottomY = selectionBottom - mFontLineSpacingAndAscent + mFontAscent;
+            
+            // Only draw if coordinates are valid
+            if (topY < bottomY && selectionLeft < selectionRight) {
+                canvas.drawRect(selectionLeft, topY, selectionRight, bottomY, mSelectionPaint);
+            }
         }
     }
 
     private void drawTextRun(Canvas canvas, char[] text, int[] palette, float y, int startColumn, int runWidthColumns,
                              int startCharIndex, int runWidthChars, float mes, int cursor, int cursorStyle,
-                             long textStyle, boolean reverseVideo) {
+                             long textStyle, boolean reverseVideo, boolean insideSelection) {
         int foreColor = TextStyle.decodeForeColor(textStyle);
         final int effect = TextStyle.decodeEffect(textStyle);
         int backColor = TextStyle.decodeBackColor(textStyle);

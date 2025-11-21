@@ -98,7 +98,7 @@ fun Settings(modifier: Modifier = Modifier,navController: NavController,mainActi
 
             SettingsCard(
                 title = { Text("Android") },
-                description = {Text("ReTerminal Android shell")},
+                description = {Text("aTerm Android shell")},
                 startWidget = {
                     RadioButton(
                         modifier = Modifier

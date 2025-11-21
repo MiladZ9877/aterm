@@ -350,7 +350,7 @@ fun TerminalScreen(
 
                     SettingsCard(
                         title = { Text("Android") },
-                        description = {Text("ReTerminal Android shell")},
+                        description = {Text("aTerm Android shell")},
                         onClick = {
                             createSession(workingMode = WorkingMode.ANDROID)
                             showAddDialog = false
@@ -485,7 +485,7 @@ fun TerminalScreen(
                                     ),
                                     title = {
                                         Column {
-                                            Text(text = "ReTerminal",color = color)
+                                            Text(text = "aTerm",color = color)
                                             Text(style = MaterialTheme.typography.bodySmall,text = mainActivityActivity.sessionBinder?.getService()?.currentSession?.value?.first + " (${getNameOfWorkingMode(mainActivityActivity.sessionBinder?.getService()?.currentSession?.value?.second)})",color = color)
                                         }
                                     },

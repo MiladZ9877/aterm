@@ -1,0 +1,907 @@
+package com.qali.aterm.ui.screens.terminal
+
+import android.app.Activity
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.Typeface
+import android.os.Build
+import android.util.TypedValue
+import android.view.KeyEvent
+import android.view.View
+import android.view.Window
+import android.view.inputmethod.EditorInfo
+import android.widget.EditText
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.widget.doOnTextChanged
+import androidx.navigation.NavController
+import androidx.palette.graphics.Palette
+import com.google.accompanist.systemuicontroller.rememberSystemUiController
+import com.google.android.material.R
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.rk.components.compose.preferences.base.PreferenceGroup
+import com.rk.libcommons.application
+import com.rk.libcommons.child
+import com.rk.libcommons.dpToPx
+import com.rk.libcommons.localDir
+import com.rk.libcommons.pendingCommand
+import com.rk.resources.strings
+import com.rk.settings.Settings
+import com.qali.aterm.service.TabType
+import com.qali.aterm.ui.activities.terminal.MainActivity
+import com.qali.aterm.ui.screens.agent.AgentScreen
+import com.qali.aterm.ui.screens.codeeditor.CodeEditorScreen
+import com.qali.aterm.ui.screens.fileexplorer.FileExplorerScreen
+import com.qali.aterm.ui.components.SettingsToggle
+import com.qali.aterm.ui.routes.MainActivityRoutes
+import com.qali.aterm.ui.screens.settings.SettingsCard
+import com.qali.aterm.ui.screens.settings.WorkingMode
+import com.qali.aterm.ui.screens.terminal.virtualkeys.VirtualKeysConstants
+import com.qali.aterm.ui.screens.terminal.virtualkeys.VirtualKeysInfo
+import com.qali.aterm.ui.screens.terminal.virtualkeys.VirtualKeysListener
+import com.qali.aterm.ui.screens.terminal.virtualkeys.VirtualKeysView
+import com.qali.aterm.ui.theme.KarbonTheme
+import com.termux.terminal.TerminalColors
+import com.termux.view.TerminalView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileInputStream
+import java.lang.ref.WeakReference
+import java.util.Properties
+
+var terminalView = WeakReference<TerminalView?>(null)
+var virtualKeysView = WeakReference<VirtualKeysView?>(null)
+
+
+var darkText = mutableStateOf(Settings.blackTextColor)
+var bitmap = mutableStateOf<ImageBitmap?>(null)
+
+private val file = application!!.filesDir.child("font.ttf")
+private var font = (if (file.exists() && file.canRead()){
+    Typeface.createFromFile(file)
+}else{
+    Typeface.MONOSPACE
+})
+
+suspend fun setFont(typeface: Typeface) = withContext(Dispatchers.Main){
+    font = typeface
+    terminalView.get()?.apply {
+        setTypeface(typeface)
+        onScreenUpdated()
+    }
+}
+
+inline fun getViewColor(): Int{
+    return if (darkText.value){
+        Color.BLACK
+    }else{
+        Color.WHITE
+    }
+}
+
+inline fun getComposeColor():androidx.compose.ui.graphics.Color{
+    return if (darkText.value){
+        androidx.compose.ui.graphics.Color.Black
+    }else{
+        androidx.compose.ui.graphics.Color.White
+    }
+}
+
+var showToolbar = mutableStateOf(Settings.toolbar)
+var showVirtualKeys = mutableStateOf(Settings.virtualKeys)
+var showHorizontalToolbar = mutableStateOf(Settings.toolbar)
+
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TerminalScreen(
+    modifier: Modifier = Modifier,
+    mainActivityActivity: MainActivity,
+    navController: NavController
+) {
+    val context = LocalContext.current
+    val isDarkMode = isSystemInDarkTheme()
+    val scope = rememberCoroutineScope()
+    
+    // Track current active tab (per session)
+    val currentMainSessionId = mainActivityActivity.sessionBinder?.getService()?.currentSession?.value?.first ?: "main"
+    var selectedTabIndex by rememberSaveable(currentMainSessionId) { mutableStateOf(0) }
+    
+    val tabs = listOf(
+        TabType.TERMINAL,
+        TabType.FILE_EXPLORER,
+        TabType.TEXT_EDITOR,
+        TabType.AGENT
+    )
+    
+    // Reset tab to Terminal when switching sessions
+    LaunchedEffect(currentMainSessionId) {
+        selectedTabIndex = 0
+    }
+
+
+    LaunchedEffect(Unit){
+        withContext(Dispatchers.IO){
+            if (context.filesDir.child("background").exists().not()){
+                darkText.value = !isDarkMode
+            }else if (bitmap.value == null){
+                val fullBitmap = BitmapFactory.decodeFile(context.filesDir.child("background").absolutePath)?.asImageBitmap()
+                if (fullBitmap != null) bitmap.value = fullBitmap
+            }
+        }
+
+
+        scope.launch(Dispatchers.Main){
+            virtualKeysView.get()?.apply {
+                virtualKeysViewClient =
+                    terminalView.get()?.mTermSession?.let {
+                        VirtualKeysListener(
+                            it
+                        )
+                    }
+
+                buttonTextColor = getViewColor()
+
+
+                reload(
+                    VirtualKeysInfo(
+                        VIRTUAL_KEYS,
+                        "",
+                        VirtualKeysConstants.CONTROL_CHARS_ALIASES
+                    )
+                )
+            }
+
+            terminalView.get()?.apply {
+                onScreenUpdated()
+
+
+                mEmulator?.mColors?.mCurrentColors?.apply {
+                    set(256, getViewColor())
+                    set(258, getViewColor())
+                }
+            }
+        }
+
+
+    }
+    
+    // Handle tab changes - switch session when tab changes
+    LaunchedEffect(selectedTabIndex, currentMainSessionId) {
+        // Hide keyboard when switching tabs
+        val keyboardController = LocalSoftwareKeyboardController.current
+        keyboardController?.hide()
+        
+        terminalView.get()?.let { view ->
+            val mainSessionId = mainActivityActivity.sessionBinder?.getService()?.currentSession?.value?.first ?: "main"
+            val currentTabType = tabs[selectedTabIndex]
+            val sessionIdForTab = mainActivityActivity.sessionBinder?.getService()
+                ?.getSessionIdForTab(mainSessionId, currentTabType)
+            
+            sessionIdForTab?.let { sessionId ->
+                val session = mainActivityActivity.sessionBinder?.getSession(sessionId)
+                if (session != null && view.mTermSession != session) {
+                    val client = TerminalBackEnd(view, mainActivityActivity)
+                    session.updateTerminalSessionClient(client)
+                    view.attachSession(session)
+                    view.setTerminalViewClient(client)
+                    view.onScreenUpdated()
+                }
+            }
+        }
+    }
+
+    Box {
+        val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+        val configuration = LocalConfiguration.current
+        val screenWidthDp = configuration.screenWidthDp
+        val drawerWidth = (screenWidthDp * 0.84).dp
+        var showAddDialog by remember { mutableStateOf(false) }
+
+        BackHandler(enabled = drawerState.isOpen) {
+            scope.launch {
+                drawerState.close()
+            }
+        }
+
+        if (drawerState.isClosed){
+            SetStatusBarTextColor(isDarkIcons = darkText.value)
+        }else{
+            SetStatusBarTextColor(isDarkIcons = !isDarkMode)
+        }
+
+        if (showAddDialog){
+            BasicAlertDialog(
+                onDismissRequest = {
+                    showAddDialog = false
+                }
+            ) {
+
+                fun createSession(workingMode:Int){
+                    fun generateUniqueString(existingStrings: List<String>): String {
+                        var index = 1
+                        var newString: String
+
+                        do {
+                            newString = "main$index"
+                            index++
+                        } while (newString in existingStrings)
+
+                        return newString
+                    }
+
+                    val sessionId = generateUniqueString(mainActivityActivity.sessionBinder!!.getService().getVisibleSessions())
+
+                    terminalView.get()
+                        ?.let {
+                            val client = TerminalBackEnd(it, mainActivityActivity)
+                            // Create session with 3 hidden sessions (file explorer, text editor, agent)
+                            mainActivityActivity.sessionBinder!!.createSessionWithHidden(
+                                sessionId,
+                                client,
+                                mainActivityActivity, workingMode = workingMode
+                            )
+                        }
+
+
+                    changeSession(mainActivityActivity, session_id = sessionId)
+                }
+
+
+                PreferenceGroup {
+                    val installedRootfs = remember { Rootfs.getInstalledRootfsList() }
+                    val hasAlpine = installedRootfs.contains("alpine.tar.gz")
+                    val hasUbuntu = installedRootfs.contains("ubuntu.tar.gz")
+
+                    SettingsCard(
+                        title = { Text("Android") },
+                        description = {Text("aTerm Android shell")},
+                        onClick = {
+                            createSession(workingMode = WorkingMode.ANDROID)
+                            showAddDialog = false
+                        })
+
+                    if (hasAlpine) {
+                        SettingsCard(
+                            title = { Text("Alpine") },
+                            description = {Text("Alpine Linux")},
+                            onClick = {
+                                createSession(workingMode = WorkingMode.ALPINE)
+                                showAddDialog = false
+                            })
+                    }
+                    
+                    if (hasUbuntu) {
+                        SettingsCard(
+                            title = { Text("Ubuntu") },
+                            description = {Text("Ubuntu Linux")},
+                            onClick = {
+                                createSession(workingMode = WorkingMode.UBUNTU)
+                                showAddDialog = false
+                            })
+                    }
+                }
+            }
+        }
+
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            gesturesEnabled = drawerState.isOpen || !(showToolbar.value && (LocalConfiguration.current.orientation != Configuration.ORIENTATION_LANDSCAPE || showHorizontalToolbar.value)),
+            drawerContent = {
+                ModalDrawerSheet(modifier = Modifier.width(drawerWidth)) {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Session",
+                                style = MaterialTheme.typography.titleLarge
+                            )
+
+                            Row {
+                                val keyboardController = LocalSoftwareKeyboardController.current
+                                IconButton(onClick = {
+                                    navController.navigate(MainActivityRoutes.Settings.route)
+                                    keyboardController?.hide()
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Settings,
+                                        contentDescription = null
+                                    )
+                                }
+
+                                IconButton(onClick = {
+                                    showAddDialog = true
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = null
+                                    )
+                                }
+
+                            }
+
+
+                        }
+
+                        mainActivityActivity.sessionBinder?.getService()?.getVisibleSessions()?.let { sessionList ->
+                            LazyColumn {
+                                items(sessionList) { session_id: String ->
+                                    SelectableCard(
+                                        selected = session_id == mainActivityActivity.sessionBinder?.getService()?.currentSession?.value?.first,
+                                        onSelect = {
+                                            changeSession(
+                                                mainActivityActivity,
+                                                session_id
+                                            )
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(8.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = session_id,
+                                                style = MaterialTheme.typography.bodyLarge
+                                            )
+
+                                            if (session_id != mainActivityActivity.sessionBinder?.getService()?.currentSession?.value?.first) {
+                                                Spacer(modifier = Modifier.weight(1f))
+
+                                                IconButton(
+                                                    onClick = {
+                                                        println(session_id)
+                                                        mainActivityActivity.sessionBinder?.terminateSession(
+                                                            session_id
+                                                        )
+                                                    },
+                                                    modifier = Modifier.size(24.dp)
+                                                ) {
+                                                    
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Delete,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                }
+                                            }
+
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                    }
+                }
+
+            },
+            content = {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        BackgroundImage()
+                        val color = getComposeColor()
+                        Column {
+
+                            fun getNameOfWorkingMode(workingMode:Int?):String{
+                                return when(workingMode){
+                                    0 -> "ALPINE".lowercase()
+                                    1 -> "ANDROID".lowercase()
+                                    2 -> "UBUNTU".lowercase()
+                                    null -> "null"
+                                    else -> "unknown"
+                                }
+                            }
+
+
+                            if (showToolbar.value && (LocalConfiguration.current.orientation != Configuration.ORIENTATION_LANDSCAPE || showHorizontalToolbar.value)){
+                                TopAppBar(
+                                    colors = TopAppBarDefaults.topAppBarColors(
+                                        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                        scrolledContainerColor = androidx.compose.ui.graphics.Color.Transparent
+                                    ),
+                                    title = {
+                                        Column {
+                                            Text(text = "aTerm",color = color)
+                                            Text(style = MaterialTheme.typography.bodySmall,text = mainActivityActivity.sessionBinder?.getService()?.currentSession?.value?.first + " (${getNameOfWorkingMode(mainActivityActivity.sessionBinder?.getService()?.currentSession?.value?.second)})",color = color)
+                                        }
+                                    },
+                                    navigationIcon = {
+                                        IconButton(onClick = {
+                                            scope.launch { drawerState.open() }
+                                        }) {
+                                            Icon(Icons.Default.Menu, null, tint = color)
+                                        }
+                                    },
+                                    actions = {
+                                        IconButton(onClick = {
+                                            showAddDialog = true
+                                        }) {
+                                            Icon(Icons.Default.Add,null, tint = color)
+                                        }
+                                    }
+                                )
+                            }
+
+                            val density = LocalDensity.current
+                            Column(modifier = Modifier.imePadding().navigationBarsPadding().padding(top = if (showToolbar.value){0.dp}else{
+                                with(density){
+                                    TopAppBarDefaults.windowInsets.getTop(density).toDp()
+                                }
+                            })) {
+                                // Tab Row
+                                val currentMainSession = mainActivityActivity.sessionBinder?.getService()?.currentSession?.value?.first ?: "main"
+                                TabRow(
+                                    selectedTabIndex = selectedTabIndex,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    tabs.forEachIndexed { index, tabType ->
+                                        Tab(
+                                            selected = selectedTabIndex == index,
+                                            onClick = { 
+                                                // Hide keyboard when switching tabs
+                                                val keyboardController = LocalSoftwareKeyboardController.current
+                                                keyboardController?.hide()
+                                                selectedTabIndex = index
+                                            },
+                                            text = {
+                                                Text(
+                                                    when (tabType) {
+                                                        TabType.TERMINAL -> "Terminal"
+                                                        TabType.FILE_EXPLORER -> "File Explorer"
+                                                        TabType.TEXT_EDITOR -> "Text Editor"
+                                                        TabType.AGENT -> "Agent"
+                                                    }
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                                
+                                // Show appropriate screen based on selected tab
+                                when (tabs[selectedTabIndex]) {
+                                    TabType.TERMINAL -> {
+                                        AndroidView(
+                                    factory = { context ->
+                                        TerminalView(context, null).apply {
+                                            terminalView = WeakReference(this)
+                                            setTextSize(
+                                                dpToPx(
+                                                    Settings.terminal_font_size.toFloat(),
+                                                    context
+                                                )
+                                            )
+                                            val client = TerminalBackEnd(this, mainActivityActivity)
+                                            
+                                            // Get the current main session ID
+                                            val mainSessionId = if (pendingCommand != null) {
+                                                pendingCommand!!.id
+                                            } else {
+                                                mainActivityActivity.sessionBinder!!.getService().currentSession.value.first
+                                            }
+                                            
+                                            // Get the session ID for the currently selected tab
+                                            val currentTabType = tabs[selectedTabIndex]
+                                            val sessionIdForTab = mainActivityActivity.sessionBinder!!.getService()
+                                                .getSessionIdForTab(mainSessionId, currentTabType)
+
+                                            val session = if (pendingCommand != null) {
+                                                mainActivityActivity.sessionBinder!!.getService().currentSession.value = Pair(
+                                                    pendingCommand!!.id, pendingCommand!!.workingMode)
+                                                // Create session with hidden if needed
+                                                mainActivityActivity.sessionBinder!!.getSession(mainSessionId)
+                                                    ?: mainActivityActivity.sessionBinder!!.createSessionWithHidden(
+                                                        mainSessionId,
+                                                        client,
+                                                        mainActivityActivity, workingMode = Settings.working_Mode
+                                                    )
+                                                // Get the session for the current tab
+                                                mainActivityActivity.sessionBinder!!.getSession(sessionIdForTab)
+                                                    ?: mainActivityActivity.sessionBinder!!.getSession(mainSessionId)
+                                            } else {
+                                                // Ensure main session exists
+                                                val mainSession = mainActivityActivity.sessionBinder!!.getSession(mainSessionId)
+                                                    ?: mainActivityActivity.sessionBinder!!.createSessionWithHidden(
+                                                        mainSessionId,
+                                                        client,
+                                                        mainActivityActivity,workingMode = Settings.working_Mode
+                                                    )
+                                                // Get the session for the current tab
+                                                mainActivityActivity.sessionBinder!!.getSession(sessionIdForTab)
+                                                    ?: mainSession
+                                            }
+
+                                            session?.updateTerminalSessionClient(client)
+                                            session?.let { attachSession(it) }
+                                            setTerminalViewClient(client)
+                                            setTypeface(font)
+
+                                            post {
+                                                val color = getViewColor()
+
+                                                keepScreenOn = true
+                                                requestFocus()
+                                                isFocusableInTouchMode = true
+
+                                                mEmulator?.mColors?.mCurrentColors?.apply {
+                                                    set(256, color)
+                                                    set(258, color)
+                                                }
+
+                                                val colorsFile = localDir().child("colors.properties")
+                                                if (colorsFile.exists() && colorsFile.isFile){
+                                                    val props = Properties()
+                                                    FileInputStream(colorsFile).use { input ->
+                                                        props.load(input)
+                                                    }
+                                                    TerminalColors.COLOR_SCHEME.updateWith(props)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
+                                    update = { terminalView ->
+                                        terminalView.onScreenUpdated()
+                                       val color = getViewColor()
+
+                                        terminalView.mEmulator?.mColors?.mCurrentColors?.apply {
+                                            set(256, color)
+                                            set(258, color)
+                                        }
+                                    },
+                                )
+                                    }
+                                    
+                                    TabType.FILE_EXPLORER -> {
+                                        FileExplorerScreen(
+                                            mainActivity = mainActivityActivity,
+                                            sessionId = currentMainSession
+                                        )
+                                    }
+                                    
+                                    TabType.TEXT_EDITOR -> {
+                                        CodeEditorScreen(
+                                            mainActivity = mainActivityActivity,
+                                            sessionId = currentMainSession
+                                        )
+                                    }
+                                    
+                                    TabType.AGENT -> {
+                                        AgentScreen(
+                                            mainActivity = mainActivityActivity,
+                                            sessionId = currentMainSession
+                                        )
+                                    }
+                                }
+
+                                if (showVirtualKeys.value && tabs[selectedTabIndex] == TabType.TERMINAL){
+                                    val pagerState = rememberPagerState(pageCount = { 2 })
+                                    val onSurfaceColor = MaterialTheme.colorScheme.onSurface.toArgb()
+                                    HorizontalPager(
+                                        state = pagerState,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(75.dp)
+                                    ) { page ->
+                                        when (page) {
+                                            0 -> {
+                                                terminalView.get()?.requestFocus()
+                                                //terminalView.get()?.requestFocusFromTouch()
+                                                AndroidView(
+                                                    factory = { context ->
+                                                        VirtualKeysView(context, null).apply {
+                                                            virtualKeysView = WeakReference(this)
+                                                            virtualKeysViewClient =
+                                                                terminalView.get()?.mTermSession?.let {
+                                                                    VirtualKeysListener(
+                                                                        it
+                                                                    )
+                                                                }
+
+                                                            buttonTextColor = onSurfaceColor!!
+
+                                                            reload(
+                                                                VirtualKeysInfo(
+                                                                    VIRTUAL_KEYS,
+                                                                    "",
+                                                                    VirtualKeysConstants.CONTROL_CHARS_ALIASES
+                                                                )
+                                                            )
+                                                        }
+                                                    },
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(75.dp)
+                                                )
+                                            }
+
+                                            1 -> {
+                                                var text by rememberSaveable { mutableStateOf("") }
+
+                                                AndroidView(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(75.dp),
+                                                    factory = { ctx ->
+                                                        EditText(ctx).apply {
+                                                            maxLines = 1
+                                                            isSingleLine = true
+                                                            imeOptions = EditorInfo.IME_ACTION_DONE
+
+                                                            // Listen for text changes to update Compose state
+                                                            doOnTextChanged { textInput, _, _, _ ->
+                                                                text = textInput.toString()
+                                                            }
+
+                                                            setOnEditorActionListener { v, actionId, event ->
+                                                                if (actionId == EditorInfo.IME_ACTION_DONE) {
+                                                                    if (text.isEmpty()) {
+                                                                        // Dispatch enter key events if text is empty
+                                                                        val eventDown = KeyEvent(
+                                                                            KeyEvent.ACTION_DOWN,
+                                                                            KeyEvent.KEYCODE_ENTER
+                                                                        )
+                                                                        val eventUp = KeyEvent(
+                                                                            KeyEvent.ACTION_UP,
+                                                                            KeyEvent.KEYCODE_ENTER
+                                                                        )
+                                                                        terminalView.get()
+                                                                            ?.dispatchKeyEvent(eventDown)
+                                                                        terminalView.get()
+                                                                            ?.dispatchKeyEvent(eventUp)
+                                                                    } else {
+                                                                        terminalView.get()?.currentSession?.write(
+                                                                            text
+                                                                        )
+                                                                        setText("")
+                                                                    }
+                                                                    true
+                                                                } else {
+                                                                    false
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                    update = { editText ->
+                                                        // Keep EditText's text in sync with Compose state, avoid infinite loop by only updating if different
+                                                        if (editText.text.toString() != text) {
+                                                            editText.setText(text)
+                                                            editText.setSelection(text.length)
+                                                        }
+                                                    }
+                                                )
+                                            }
+                                        }
+
+                                    }
+                                }else{
+                                    virtualKeysView = WeakReference(null)
+                                }
+
+                            }
+                        }
+
+
+
+                }
+
+            })
+    }
+}
+
+@Composable
+fun BackgroundImage() {
+    bitmap.value?.let {
+        Image(
+            bitmap = it,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(-1f)
+        )
+    }
+}
+
+@Composable
+fun SetStatusBarTextColor(isDarkIcons: Boolean) {
+    val view = LocalView.current
+    val window = (view.context as? Activity)?.window ?: return
+
+    SideEffect {
+        WindowCompat.getInsetsController(window, view)?.isAppearanceLightStatusBars = isDarkIcons
+    }
+}
+
+
+
+@Composable
+fun SelectableCard(
+    selected: Boolean,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val containerColor by animateColorAsState(
+        targetValue = when {
+            selected -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.colorScheme.surface
+        },
+        label = "containerColor"
+    )
+
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = containerColor,
+            contentColor = if (selected) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
+        ),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (selected) 8.dp else 2.dp
+        ),
+        enabled = enabled,
+        onClick = onSelect
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            content()
+        }
+    }
+}
+
+
+fun changeSession(mainActivityActivity: MainActivity, session_id: String) {
+    terminalView.get()?.apply {
+        val client = TerminalBackEnd(this, mainActivityActivity)
+        val session =
+            mainActivityActivity.sessionBinder!!.getSession(session_id)
+                ?: mainActivityActivity.sessionBinder!!.createSessionWithHidden(
+                    session_id,
+                    client,
+                    mainActivityActivity,workingMode = Settings.working_Mode
+                )
+        session.updateTerminalSessionClient(client)
+        attachSession(session)
+        setTerminalViewClient(client)
+        post {
+            val typedValue = TypedValue()
+
+            context.theme.resolveAttribute(
+                R.attr.colorOnSurface,
+                typedValue,
+                true
+            )
+            keepScreenOn = true
+            requestFocus()
+            isFocusableInTouchMode = true
+
+            mEmulator?.mColors?.mCurrentColors?.apply {
+                set(256, typedValue.data)
+                set(258, typedValue.data)
+            }
+        }
+        virtualKeysView.get()?.apply {
+            virtualKeysViewClient =
+                terminalView.get()?.mTermSession?.let { VirtualKeysListener(it) }
+        }
+
+    }
+    mainActivityActivity.sessionBinder!!.getService().currentSession.value = Pair(session_id,mainActivityActivity.sessionBinder!!.getService().sessionList[session_id]!!)
+
+}
+
+
+const val VIRTUAL_KEYS =
+    ("[" + "\n  [" + "\n    \"ESC\"," + "\n    {" + "\n      \"key\": \"/\"," + "\n      \"popup\": \"\\\\\"" + "\n    }," + "\n    {" + "\n      \"key\": \"-\"," + "\n      \"popup\": \"|\"" + "\n    }," + "\n    \"HOME\"," + "\n    \"UP\"," + "\n    \"END\"," + "\n    \"PGUP\"" + "\n  ]," + "\n  [" + "\n    \"TAB\"," + "\n    \"CTRL\"," + "\n    \"ALT\"," + "\n    \"LEFT\"," + "\n    \"DOWN\"," + "\n    \"RIGHT\"," + "\n    \"PGDN\"" + "\n  ]" + "\n]")

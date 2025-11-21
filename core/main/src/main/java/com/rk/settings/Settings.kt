@@ -10,7 +10,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.pm.PackageInfoCompat
 import com.rk.components.compose.preferences.normal.Preference
 import com.rk.libcommons.application
-import com.rk.terminal.ui.screens.settings.WorkingMode
+import com.qali.aterm.ui.screens.settings.WorkingMode
 import java.nio.charset.Charset
 
 object Settings {
@@ -34,7 +34,7 @@ object Settings {
 
 
    var default_night_mode
-        get() = Preference.getInt(key = "default_night_mode", default = AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+        get() = Preference.getInt(key = "default_night_mode", default = AppCompatDelegate.MODE_NIGHT_YES)
         set(value) = Preference.setInt(key = "default_night_mode",value)
 
     var terminal_font_size

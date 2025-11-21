@@ -15,7 +15,7 @@ plugins {
 
 
 android {
-    namespace = "com.rk.application"
+    namespace = "com.qali.aterm"
     compileSdk = 35
 
 
@@ -80,18 +80,18 @@ android {
             } else {
                 signingConfig = signingConfigs.getByName("debug")
             }
-            resValue("string","app_name","ReTerminal")
+            resValue("string","app_name","aTerm")
         }
         debug{
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-DEBUG"
-            resValue("string","app_name","ReTerminal-Debug")
+            resValue("string","app_name","aTerm-Debug")
         }
     }
 
     
     defaultConfig {
-        applicationId = "com.rk.terminal"
+        applicationId = "com.qali.aterm"
         minSdk = 26
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
