@@ -218,24 +218,30 @@ fun TerminalScreen(
 
     // Update terminal text color based on theme
     LaunchedEffect(isDarkMode) {
+        // In dark mode, we want white text (darkText = false)
+        // In light mode, we want black text (darkText = true)
         darkText.value = !isDarkMode
-        terminalView.get()?.apply {
-            val color = getViewColor()
-            mEmulator?.mColors?.mCurrentColors?.apply {
-                set(256, color) // Foreground color
-                set(258, color) // Cursor color
+        
+        // Force update terminal colors immediately
+        scope.launch(Dispatchers.Main) {
+            terminalView.get()?.apply {
+                val color = if (isDarkMode) Color.WHITE else Color.BLACK
+                mEmulator?.mColors?.mCurrentColors?.apply {
+                    set(256, color) // Foreground color
+                    set(258, color) // Cursor color
+                }
+                onScreenUpdated()
             }
-            onScreenUpdated()
-        }
-        virtualKeysView.get()?.apply {
-            buttonTextColor = getViewColor()
-            reload(
-                VirtualKeysInfo(
-                    VIRTUAL_KEYS,
-                    "",
-                    VirtualKeysConstants.CONTROL_CHARS_ALIASES
+            virtualKeysView.get()?.apply {
+                buttonTextColor = if (isDarkMode) Color.WHITE else Color.BLACK
+                reload(
+                    VirtualKeysInfo(
+                        VIRTUAL_KEYS,
+                        "",
+                        VirtualKeysConstants.CONTROL_CHARS_ALIASES
+                    )
                 )
-            )
+            }
         }
     }
     
@@ -646,16 +652,18 @@ fun TerminalScreen(
                                             setTypeface(font)
 
                                             post {
-                                                val color = getViewColor()
-
                                                 keepScreenOn = true
                                                 requestFocus()
                                                 isFocusableInTouchMode = true
 
+                                                // Set terminal colors based on current theme
+                                                darkText.value = !isDarkMode
+                                                val color = if (isDarkMode) Color.WHITE else Color.BLACK
                                                 mEmulator?.mColors?.mCurrentColors?.apply {
                                                     set(256, color) // Foreground color
                                                     set(258, color) // Cursor color
                                                 }
+                                                onScreenUpdated()
                                                 
                                                 // Force update terminal colors based on current theme
                                                 darkText.value = !isDarkMode

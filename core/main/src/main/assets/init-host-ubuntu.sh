@@ -3,7 +3,15 @@ UBUNTU_DIR=$PREFIX/local/ubuntu
 mkdir -p $UBUNTU_DIR
 
 if [ -z "$(ls -A "$UBUNTU_DIR" | grep -vE '^(root|tmp)$')" ]; then
-    tar -xf "$PREFIX/files/ubuntu.tar.gz" -C "$UBUNTU_DIR"
+    if [ ! -f "$PREFIX/files/ubuntu.tar.gz" ]; then
+        echo "Error: ubuntu.tar.gz not found at $PREFIX/files/ubuntu.tar.gz"
+        exit 1
+    fi
+    echo "Extracting Ubuntu rootfs..."
+    tar -xf "$PREFIX/files/ubuntu.tar.gz" -C "$UBUNTU_DIR" || {
+        echo "Error: Failed to extract ubuntu.tar.gz"
+        exit 1
+    }
 fi
 
 [ ! -e "$PREFIX/local/bin/proot" ] && cp "$PREFIX/files/proot" "$PREFIX/local/bin"

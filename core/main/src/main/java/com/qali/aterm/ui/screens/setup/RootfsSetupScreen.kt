@@ -238,7 +238,7 @@ fun RootfsSetupScreen(
 
         Spacer(modifier = Modifier.weight(1f))
 
-        // Install button
+        // Install button - with bottom padding to escape navigation menu
         Button(
             onClick = {
                 if (selectedType == null) {
@@ -403,7 +403,9 @@ fun RootfsSetupScreen(
                     }
                 }
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 32.dp), // Add padding to escape navigation menu
             enabled = !isDownloading && selectedType != null && (selectedType != RootfsType.FILE_PICKER || selectedFile != null)
         ) {
             Text(if (isDownloading) "Installing..." else "Install")
