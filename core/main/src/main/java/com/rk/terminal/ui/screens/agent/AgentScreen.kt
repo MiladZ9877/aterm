@@ -241,10 +241,10 @@ fun DirectoryPickerDialog(
 
 /**
  * Parse file diff from tool result
- * Extracts file path and content from edit_file and write_file tool results
+ * Extracts file path and content from edit and write_file tool results
  */
 fun parseFileDiffFromToolResult(toolName: String, toolResult: ToolResult, toolArgs: Map<String, Any>? = null): FileDiff? {
-    if (toolName != "edit_file" && toolName != "write_file") {
+    if (toolName != "edit" && toolName != "write_file") {
         return null
     }
     
@@ -258,8 +258,8 @@ fun parseFileDiffFromToolResult(toolName: String, toolResult: ToolResult, toolAr
                 filePathPattern.find(content)?.groupValues?.get(1)
             } ?: return null
         
-        // For edit_file, extract old_string and new_string from args
-        if (toolName == "edit_file" && toolArgs != null) {
+        // For edit, extract old_string and new_string from args
+        if (toolName == "edit" && toolArgs != null) {
             val oldString = toolArgs["old_string"] as? String ?: ""
             val newString = toolArgs["new_string"] as? String ?: ""
             val isNewFile = oldString.isEmpty()
@@ -1526,7 +1526,7 @@ fun AgentScreen(
                                                             }
                                                             is GeminiStreamEvent.ToolCall -> {
                                                                 // Store tool call args in queue for file diff extraction
-                                                                if (event.functionCall.name == "edit_file" || event.functionCall.name == "write_file") {
+                                                                if (event.functionCall.name == "edit" || event.functionCall.name == "write_file") {
                                                                     toolCallQueue.add(Pair(event.functionCall.name, event.functionCall.args))
                                                                 }
                                                                 val toolMessage = AgentMessage(

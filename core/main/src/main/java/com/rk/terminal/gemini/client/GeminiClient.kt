@@ -2153,7 +2153,7 @@ class GeminiClient(
                 val description = fix.optString("description", "")
                 
                 val editCall = FunctionCall(
-                    name = "edit_file",
+                    name = "edit",
                     args = mapOf(
                         "file_path" to filePath,
                         "old_string" to oldString,
@@ -2165,7 +2165,7 @@ class GeminiClient(
                 onToolCall(editCall)
                 
                 val editResult = try {
-                    executeToolSync("edit_file", editCall.args)
+                    executeToolSync("edit", editCall.args)
                 } catch (e: Exception) {
                     ToolResult(
                         llmContent = "Error: ${e.message}",
@@ -2177,8 +2177,8 @@ class GeminiClient(
                     )
                 }
                 
-                emit(GeminiStreamEvent.ToolResult("edit_file", editResult))
-                onToolResult("edit_file", editCall.args)
+                emit(GeminiStreamEvent.ToolResult("edit", editResult))
+                onToolResult("edit", editCall.args)
                 
                 if (editResult.error == null) {
                     successCount++
