@@ -148,6 +148,68 @@ var virtualKeysView = WeakReference<VirtualKeysView?>(null)
 
 
 var darkText = mutableStateOf(Settings.blackTextColor)
+
+/**
+ * Sets up terminal colors for dark or light theme.
+ * In dark theme, uses light colors for text visibility.
+ * In light theme, uses dark colors for text visibility.
+ */
+fun setupTerminalColors(terminalView: TerminalView?, isDarkMode: Boolean) {
+    terminalView?.mEmulator?.mColors?.mCurrentColors?.apply {
+        val foregroundColor = if (isDarkMode) Color.WHITE else Color.BLACK
+        val backgroundColor = if (isDarkMode) Color.BLACK else Color.WHITE
+        
+        // Set foreground, background, and cursor colors
+        set(256, foregroundColor) // Foreground color (COLOR_INDEX_FOREGROUND)
+        set(257, backgroundColor) // Background color (COLOR_INDEX_BACKGROUND)
+        set(258, foregroundColor) // Cursor color (COLOR_INDEX_CURSOR)
+        
+        if (isDarkMode) {
+            // Dark theme: Use light colors for ANSI palette
+            // Standard colors (0-7)
+            set(0, Color.BLACK)        // Black
+            set(1, Color.rgb(187, 0, 0))      // Red (bright)
+            set(2, Color.rgb(0, 187, 0))       // Green (bright)
+            set(3, Color.rgb(187, 187, 0))     // Yellow (bright)
+            set(4, Color.rgb(0, 0, 187))      // Blue (bright)
+            set(5, Color.rgb(187, 0, 187))    // Magenta (bright)
+            set(6, Color.rgb(0, 187, 187))    // Cyan (bright)
+            set(7, Color.rgb(187, 187, 187)) // White (light gray)
+            
+            // Bright colors (8-15)
+            set(8, Color.rgb(85, 85, 85))     // Bright Black (dark gray)
+            set(9, Color.rgb(255, 85, 85))    // Bright Red
+            set(10, Color.rgb(85, 255, 85))  // Bright Green
+            set(11, Color.rgb(255, 255, 85)) // Bright Yellow
+            set(12, Color.rgb(85, 85, 255))  // Bright Blue
+            set(13, Color.rgb(255, 85, 255)) // Bright Magenta
+            set(14, Color.rgb(85, 255, 255)) // Bright Cyan
+            set(15, Color.WHITE)             // Bright White
+        } else {
+            // Light theme: Use dark colors for ANSI palette
+            // Standard colors (0-7)
+            set(0, Color.BLACK)        // Black
+            set(1, Color.rgb(128, 0, 0))      // Red
+            set(2, Color.rgb(0, 128, 0))       // Green
+            set(3, Color.rgb(128, 128, 0))     // Yellow
+            set(4, Color.rgb(0, 0, 128))      // Blue
+            set(5, Color.rgb(128, 0, 128))    // Magenta
+            set(6, Color.rgb(0, 128, 128))    // Cyan
+            set(7, Color.rgb(192, 192, 192)) // White (light gray)
+            
+            // Bright colors (8-15)
+            set(8, Color.rgb(128, 128, 128))   // Bright Black (gray)
+            set(9, Color.rgb(255, 0, 0))      // Bright Red
+            set(10, Color.rgb(0, 255, 0))     // Bright Green
+            set(11, Color.rgb(255, 255, 0))   // Bright Yellow
+            set(12, Color.rgb(0, 0, 255))     // Bright Blue
+            set(13, Color.rgb(255, 0, 255))   // Bright Magenta
+            set(14, Color.rgb(0, 255, 255))  // Bright Cyan
+            set(15, Color.BLACK)              // Bright White (black for light theme)
+        }
+    }
+    terminalView?.onScreenUpdated()
+}
 var bitmap = mutableStateOf<ImageBitmap?>(null)
 
 private val file = application!!.filesDir.child("font.ttf")
@@ -224,16 +286,7 @@ fun TerminalScreen(
         
         // Force update terminal colors immediately
         scope.launch(Dispatchers.Main) {
-            terminalView.get()?.apply {
-                val foregroundColor = if (isDarkMode) Color.WHITE else Color.BLACK
-                val backgroundColor = if (isDarkMode) Color.BLACK else Color.WHITE
-                mEmulator?.mColors?.mCurrentColors?.apply {
-                    set(256, foregroundColor) // Foreground color (COLOR_INDEX_FOREGROUND)
-                    set(257, backgroundColor) // Background color (COLOR_INDEX_BACKGROUND)
-                    set(258, foregroundColor) // Cursor color (COLOR_INDEX_CURSOR)
-                }
-                onScreenUpdated()
-            }
+            setupTerminalColors(terminalView.get(), isDarkMode)
             virtualKeysView.get()?.apply {
                 buttonTextColor = if (isDarkMode) Color.WHITE else Color.BLACK
                 reload(
@@ -281,12 +334,8 @@ fun TerminalScreen(
 
             terminalView.get()?.apply {
                 onScreenUpdated()
-
-
-                mEmulator?.mColors?.mCurrentColors?.apply {
-                    set(256, getViewColor())
-                    set(258, getViewColor())
-                }
+                // Set up terminal colors based on current theme
+                setupTerminalColors(this, isSystemInDarkTheme())
             }
         }
 
@@ -665,14 +714,7 @@ fun TerminalScreen(
 
                                                 // Set terminal colors based on current theme
                                                 darkText.value = !isDarkMode
-                                                val foregroundColor = if (isDarkMode) Color.WHITE else Color.BLACK
-                                                val backgroundColor = if (isDarkMode) Color.BLACK else Color.WHITE
-                                                mEmulator?.mColors?.mCurrentColors?.apply {
-                                                    set(256, foregroundColor) // Foreground color (COLOR_INDEX_FOREGROUND)
-                                                    set(257, backgroundColor) // Background color (COLOR_INDEX_BACKGROUND)
-                                                    set(258, foregroundColor) // Cursor color (COLOR_INDEX_CURSOR)
-                                                }
-                                                onScreenUpdated()
+                                                setupTerminalColors(this, isDarkMode)
 
                                                 val colorsFile = localDir().child("colors.properties")
                                                 if (colorsFile.exists() && colorsFile.isFile){
@@ -692,14 +734,7 @@ fun TerminalScreen(
                                         terminalView.onScreenUpdated()
                                         // Update terminal colors based on current theme
                                         darkText.value = !isDarkMode
-                                        val foregroundColor = if (isDarkMode) Color.WHITE else Color.BLACK
-                                        val backgroundColor = if (isDarkMode) Color.BLACK else Color.WHITE
-                                        terminalView.mEmulator?.mColors?.mCurrentColors?.apply {
-                                            set(256, foregroundColor) // Foreground color
-                                            set(257, backgroundColor) // Background color
-                                            set(258, foregroundColor) // Cursor color
-                                        }
-                                        terminalView.onScreenUpdated()
+                                        setupTerminalColors(terminalView, isDarkMode)
                                     },
                                 )
                                     }

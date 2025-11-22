@@ -15,7 +15,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.rk.libcommons.alpineDir
+import com.rk.libcommons.getRootfsDir
 import com.qali.aterm.ui.activities.terminal.MainActivity
 import java.io.File
 
@@ -139,7 +139,7 @@ fun CodeEditorScreen(
     // File picker dialog - simplified version
     if (showFilePicker) {
         FilePickerDialog(
-            initialPath = alpineDir().absolutePath,
+            initialPath = getRootfsDir().absolutePath,
             onDismiss = { showFilePicker = false },
             onFileSelected = { file ->
                 try {

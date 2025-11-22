@@ -20,7 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.rk.libcommons.alpineDir
+import com.rk.libcommons.getRootfsDir
 import com.qali.aterm.ui.activities.terminal.MainActivity
 import java.io.File
 import java.text.SimpleDateFormat
@@ -33,8 +33,8 @@ fun FileExplorerScreen(
     sessionId: String
 ) {
     val context = LocalContext.current
-    // Start at Alpine root directory
-    val initialPath = alpineDir().absolutePath
+    // Start at rootfs root directory (based on current working mode)
+    val initialPath = getRootfsDir().absolutePath
     var currentPath by remember { mutableStateOf(initialPath) }
     var files by remember { mutableStateOf<List<FileItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }

@@ -28,6 +28,45 @@ if [ -n "$missing_packages" ]; then
     echo -e "\e[34m[*] \e[0mUse \e[32mapk\e[0m to install new packages\e[0m"
 fi
 
+# Install fish shell if not already installed
+if ! command -v fish >/dev/null 2>&1; then
+    echo -e "\e[34;1m[*] \e[0mInstalling fish shell\e[0m"
+    apk add fish 2>/dev/null || true
+    if command -v fish >/dev/null 2>&1; then
+        echo -e "\e[32;1m[+] \e[0mFish shell installed\e[0m"
+        # Set up fish with better colors for dark theme
+        mkdir -p ~/.config/fish 2>/dev/null || true
+        cat > ~/.config/fish/config.fish 2>/dev/null << 'EOF' || true
+# Fish shell configuration for better terminal colors
+set -g fish_color_normal white
+set -g fish_color_command cyan
+set -g fish_color_quote yellow
+set -g fish_color_redirection magenta
+set -g fish_color_end green
+set -g fish_color_error red
+set -g fish_color_param white
+set -g fish_color_comment brblack
+set -g fish_color_match --background=brblue
+set -g fish_color_selection white --bold --background=brblack
+set -g fish_color_search_match bryellow --background=brblack
+set -g fish_color_history_current --bold
+set -g fish_color_operator brcyan
+set -g fish_color_escape brcyan
+set -g fish_color_cwd green
+set -g fish_color_cwd_root red
+set -g fish_color_valid_path --underline
+set -g fish_color_autosuggestion brblack
+set -g fish_color_user brgreen
+set -g fish_color_host normal
+set -g fish_color_cancel -r
+set -g fish_pager_color_completion normal
+set -g fish_pager_color_description B3a06a yellow
+set -g fish_pager_color_prefix white --bold --underline
+set -g fish_pager_color_progress brwhite --background=cyan
+EOF
+    fi
+fi
+
 #fix linker warning
 if [[ ! -f /linkerconfig/ld.config.txt ]];then
     mkdir -p /linkerconfig

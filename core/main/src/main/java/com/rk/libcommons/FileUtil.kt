@@ -3,6 +3,8 @@ package com.rk.libcommons
 import android.content.Context
 import java.io.File
 import com.qali.aterm.BuildConfig
+import com.rk.settings.Settings
+import com.qali.aterm.ui.screens.settings.WorkingMode
 
 private fun getFilesDir(): File{
     return if (application == null){
@@ -37,6 +39,39 @@ fun alpineHomeDir(): File{
         if (!it.exists()) {
             it.mkdirs()
         }
+    }
+}
+
+/**
+ * Returns the rootfs directory based on the current working mode.
+ * - ALPINE (0): returns alpine directory
+ * - ANDROID (1): returns alpine directory (Android uses same structure)
+ * - UBUNTU (2): returns ubuntu directory
+ */
+fun getRootfsDir(): File {
+    return when (Settings.working_Mode) {
+        WorkingMode.ALPINE, WorkingMode.ANDROID -> alpineDir()
+        WorkingMode.UBUNTU -> localDir().child("ubuntu").also {
+            if (!it.exists()) {
+                it.mkdirs()
+            }
+        }
+        else -> alpineDir() // Default fallback
+    }
+}
+
+/**
+ * Returns the home directory within the rootfs based on the current working mode.
+ */
+fun getRootfsHomeDir(): File {
+    return when (Settings.working_Mode) {
+        WorkingMode.ALPINE, WorkingMode.ANDROID -> alpineHomeDir()
+        WorkingMode.UBUNTU -> getRootfsDir().child("root").also {
+            if (!it.exists()) {
+                it.mkdirs()
+            }
+        }
+        else -> alpineHomeDir() // Default fallback
     }
 }
 
