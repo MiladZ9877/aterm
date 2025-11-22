@@ -335,7 +335,8 @@ fun TerminalScreen(
             terminalView.get()?.apply {
                 onScreenUpdated()
                 // Set up terminal colors based on current theme
-                setupTerminalColors(this, isSystemInDarkTheme())
+                // Use isDarkMode variable instead of calling isSystemInDarkTheme() in coroutine
+                setupTerminalColors(this, isDarkMode)
             }
         }
 
