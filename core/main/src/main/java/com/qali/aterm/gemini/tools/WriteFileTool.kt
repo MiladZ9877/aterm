@@ -4,7 +4,10 @@ import com.rk.libcommons.alpineDir
 import com.qali.aterm.gemini.core.FunctionDeclaration
 import com.qali.aterm.gemini.core.FunctionParameters
 import com.qali.aterm.gemini.core.PropertySchema
+import com.qali.aterm.gemini.utils.AutoErrorDetection
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 data class WriteFileToolParams(
     val file_path: String,
@@ -53,8 +56,28 @@ class WriteFileToolInvocation(
             
             updateOutput?.invoke("File written successfully")
             
+            // Automatically detect errors after file creation/modification
+            val errorTasks = try {
+                withContext(Dispatchers.IO) {
+                    AutoErrorDetection.detectAndCreateFixTasks(
+                        filePath = params.file_path,
+                        workspaceRoot = workspaceRoot
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("WriteFileTool", "Error in auto error detection: ${e.message}")
+                emptyList()
+            }
+            
+            val baseMessage = "File written successfully: ${params.file_path}"
+            val messageWithErrors = if (errorTasks.isNotEmpty()) {
+                baseMessage + AutoErrorDetection.formatErrorDetectionMessage(errorTasks)
+            } else {
+                baseMessage
+            }
+            
             ToolResult(
-                llmContent = "File written successfully: ${params.file_path}",
+                llmContent = messageWithErrors,
                 returnDisplay = "Written ${file.name}"
             )
         } catch (e: Exception) {

@@ -76,6 +76,7 @@ object GeminiService {
         toolRegistry.registerTool(SedTool(workspaceRoot))
         toolRegistry.registerTool(SyntaxErrorDetectionTool(workspaceRoot))
         toolRegistry.registerTool(SyntaxFixTool(workspaceRoot))
+        toolRegistry.registerTool(LanguageLinterTool(workspaceRoot))
     }
     
     fun getClient(): GeminiClient? = client

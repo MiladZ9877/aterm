@@ -8,7 +8,10 @@ import com.qali.aterm.gemini.utils.safeLiteralReplace
 import com.qali.aterm.gemini.utils.createPatch
 import com.qali.aterm.gemini.utils.getDiffStat
 import com.qali.aterm.gemini.utils.FileCoherenceManager
+import com.qali.aterm.gemini.utils.AutoErrorDetection
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 data class EditToolParams(
     val file_path: String,
@@ -230,8 +233,27 @@ class EditToolInvocation(
                 successMessage
             }
             
+            // Automatically detect errors after file modification
+            val errorTasks = try {
+                withContext(Dispatchers.IO) {
+                    AutoErrorDetection.detectAndCreateFixTasks(
+                        filePath = params.file_path,
+                        workspaceRoot = workspaceRoot
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("EditTool", "Error in auto error detection: ${e.message}")
+                emptyList()
+            }
+            
+            val messageWithErrors = if (errorTasks.isNotEmpty()) {
+                finalMessage + AutoErrorDetection.formatErrorDetectionMessage(errorTasks)
+            } else {
+                finalMessage
+            }
+            
             ToolResult(
-                llmContent = finalMessage,
+                llmContent = messageWithErrors,
                 returnDisplay = displayResult.toString()
             )
         } catch (e: Exception) {
