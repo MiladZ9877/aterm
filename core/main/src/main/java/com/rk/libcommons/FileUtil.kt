@@ -61,6 +61,36 @@ fun getRootfsDir(): File {
 }
 
 /**
+ * Returns the rootfs directory for a specific working mode.
+ */
+fun getRootfsDirForMode(workingMode: Int): File {
+    return when (workingMode) {
+        WorkingMode.ALPINE, WorkingMode.ANDROID -> alpineDir()
+        WorkingMode.UBUNTU -> localDir().child("ubuntu").also {
+            if (!it.exists()) {
+                it.mkdirs()
+            }
+        }
+        else -> alpineDir() // Default fallback
+    }
+}
+
+/**
+ * Returns the rootfs directory for a specific session ID.
+ * Uses the session's working mode if available, otherwise falls back to current working mode.
+ */
+fun getRootfsDirForSession(sessionId: String): File {
+    return try {
+        val sessionService = com.qali.aterm.ui.activities.terminal.MainActivity.sessionBinder?.getService()
+        val workingMode = sessionService?.sessionList?.get(sessionId) ?: Settings.working_Mode
+        getRootfsDirForMode(workingMode)
+    } catch (e: Exception) {
+        // Fallback to current working mode if session service is not available
+        getRootfsDir()
+    }
+}
+
+/**
  * Returns the home directory within the rootfs based on the current working mode.
  */
 fun getRootfsHomeDir(): File {

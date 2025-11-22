@@ -139,7 +139,7 @@ fun CodeEditorScreen(
     // File picker dialog - simplified version
     if (showFilePicker) {
         FilePickerDialog(
-            initialPath = getRootfsDir().absolutePath,
+            initialPath = com.rk.libcommons.getRootfsDirForSession(sessionId).absolutePath,
             onDismiss = { showFilePicker = false },
             onFileSelected = { file ->
                 try {

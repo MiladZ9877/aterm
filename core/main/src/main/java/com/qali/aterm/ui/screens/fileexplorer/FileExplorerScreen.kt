@@ -33,8 +33,8 @@ fun FileExplorerScreen(
     sessionId: String
 ) {
     val context = LocalContext.current
-    // Start at rootfs root directory (based on current working mode)
-    val initialPath = getRootfsDir().absolutePath
+    // Start at rootfs root directory (based on session's working mode)
+    val initialPath = remember(sessionId) { com.rk.libcommons.getRootfsDirForSession(sessionId).absolutePath }
     var currentPath by remember { mutableStateOf(initialPath) }
     var files by remember { mutableStateOf<List<FileItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }

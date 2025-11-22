@@ -53,6 +53,63 @@ if ! command -v cron >/dev/null 2>&1; then
     apt-get install -y -qq cron 2>/dev/null || true
 fi
 
+# Create aterm-setup-storage command (same script for all distros)
+if [ ! -f "$PREFIX/local/bin/aterm-setup-storage" ]; then
+    mkdir -p "$PREFIX/local/bin" 2>/dev/null || true
+    cat > "$PREFIX/local/bin/aterm-setup-storage" << 'STORAGEEOF'
+#!/bin/sh
+# Setup /sdcard symlink for Android storage access
+# Works with Android 15+ scoped storage
+
+# Find Android external storage
+ANDROID_STORAGE=""
+for path in "/storage/emulated/0" "/sdcard" "/storage/sdcard0" "/mnt/sdcard"; do
+    if [ -d "$path" ] && [ -r "$path" ]; then
+        ANDROID_STORAGE="$path"
+        break
+    fi
+done
+
+# Also try to get from environment
+if [ -z "$ANDROID_STORAGE" ] && [ -n "$EXTERNAL_STORAGE" ]; then
+    if [ -d "$EXTERNAL_STORAGE" ] && [ -r "$EXTERNAL_STORAGE" ]; then
+        ANDROID_STORAGE="$EXTERNAL_STORAGE"
+    fi
+fi
+
+if [ -z "$ANDROID_STORAGE" ]; then
+    echo "Error: Could not find Android external storage"
+    echo "Please ensure storage permissions are granted in the app settings"
+    exit 1
+fi
+
+# Create /sdcard if it doesn't exist or is not a symlink
+if [ ! -e "/sdcard" ]; then
+    # Try to create symlink
+    ln -sf "$ANDROID_STORAGE" /sdcard 2>/dev/null || {
+        # If symlink fails, try bind mount (requires root or proot)
+        mkdir -p /sdcard 2>/dev/null || true
+        mount --bind "$ANDROID_STORAGE" /sdcard 2>/dev/null || {
+            echo "Warning: Could not create /sdcard symlink or mount"
+            echo "Storage is available at: $ANDROID_STORAGE"
+            echo "You can access it directly or set up manually"
+        }
+    }
+fi
+
+if [ -L "/sdcard" ] || [ -d "/sdcard" ]; then
+    echo "✓ Storage setup complete"
+    echo "  /sdcard -> $ANDROID_STORAGE"
+    echo "  You can now access your Android storage at /sdcard"
+else
+    echo "✗ Storage setup failed"
+    echo "  Storage is available at: $ANDROID_STORAGE"
+    exit 1
+fi
+STORAGEEOF
+    chmod +x "$PREFIX/local/bin/aterm-setup-storage" 2>/dev/null || true
+fi
+
 # Copy fish color update script (same as Ubuntu)
 if [ -f "$PREFIX/local/bin/update-fish-colors.sh" ]; then
     chmod +x "$PREFIX/local/bin/update-fish-colors.sh" 2>/dev/null || true
@@ -137,6 +194,10 @@ SCRIPTEOF
 fi
 
 "$PREFIX/local/bin/update-fish-colors.sh" 2>/dev/null || true
+
+# Setup storage access (creates /sdcard symlink)
+"$PREFIX/local/bin/aterm-setup-storage" 2>/dev/null || true
+
 (crontab -l 2>/dev/null | grep -v "update-fish-colors.sh"; echo "* * * * * $PREFIX/local/bin/update-fish-colors.sh >/dev/null 2>&1") | crontab - 2>/dev/null || true
 
 if ! pgrep -x cron >/dev/null 2>&1; then
@@ -161,7 +222,7 @@ if [[ ! -f /linkerconfig/ld.config.txt ]];then
 fi
 
 if [ -f /etc/group ]; then
-    for gid in 3003 9997 20609 50609 99909997; do
+    for gid in 3003 9997 20609 20610 50609 50610 99909997; do
         if ! grep -q "^[^:]*:[^:]*:$gid:" /etc/group 2>/dev/null; then
             echo "android_$gid:x:$gid:" >> /etc/group 2>/dev/null || true
         fi
@@ -172,7 +233,14 @@ if [ "$#" -eq 0 ]; then
     source /etc/profile 2>/dev/null || true
     export PS1="\[\e[38;5;46m\]\u\[\033[39m\]@reterm \[\033[39m\]\w \[\033[0m\]\\$ "
     cd $HOME
-    /bin/bash
+    # Start fish shell if available, otherwise fall back to bash
+    if command -v fish >/dev/null 2>&1; then
+        # Ensure fish colors are set before starting
+        "$PREFIX/local/bin/update-fish-colors.sh" 2>/dev/null || true
+        exec fish
+    else
+        /bin/bash
+    fi
 else
     exec "$@"
 fi

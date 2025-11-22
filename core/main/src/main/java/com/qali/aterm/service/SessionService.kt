@@ -242,7 +242,8 @@ class SessionService : Service() {
     }
 
     private fun getNotificationContentText(): String {
-        val count = sessions.size
+        // Only count visible sessions, not hidden ones
+        val count = getVisibleSessions().size
         if (count == 1){
             return "1 session running"
         }
