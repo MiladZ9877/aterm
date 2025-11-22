@@ -77,15 +77,16 @@ fun getRootfsDirForMode(workingMode: Int): File {
 
 /**
  * Returns the rootfs directory for a specific session ID.
- * Uses the session's working mode if available, otherwise falls back to current working mode.
+ * Uses the provided working mode if available, otherwise falls back to current working mode.
+ * 
+ * @param sessionId The session ID (for future use if needed)
+ * @param workingMode Optional working mode for the session. If null, uses current working mode.
  */
-fun getRootfsDirForSession(sessionId: String): File {
-    return try {
-        val sessionService = com.qali.aterm.ui.activities.terminal.MainActivity.sessionBinder?.getService()
-        val workingMode = sessionService?.sessionList?.get(sessionId) ?: Settings.working_Mode
+fun getRootfsDirForSession(sessionId: String, workingMode: Int? = null): File {
+    return if (workingMode != null) {
         getRootfsDirForMode(workingMode)
-    } catch (e: Exception) {
-        // Fallback to current working mode if session service is not available
+    } else {
+        // Fallback to current working mode
         getRootfsDir()
     }
 }

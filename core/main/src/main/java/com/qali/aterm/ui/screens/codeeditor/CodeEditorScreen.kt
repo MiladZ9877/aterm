@@ -137,9 +137,13 @@ fun CodeEditorScreen(
     }
     
     // File picker dialog - simplified version
+    val workingMode = remember(sessionId) {
+        mainActivity.sessionBinder?.getService()?.sessionList?.get(sessionId) as? Int
+    }
+    
     if (showFilePicker) {
         FilePickerDialog(
-            initialPath = com.rk.libcommons.getRootfsDirForSession(sessionId).absolutePath,
+            initialPath = com.rk.libcommons.getRootfsDirForSession(sessionId, workingMode).absolutePath,
             onDismiss = { showFilePicker = false },
             onFileSelected = { file ->
                 try {
