@@ -4077,32 +4077,48 @@ exports.$functionName = (req, res, next) => {
         val hasPackageJson = packageJson.exists()
         val hasRequirements = requirementsTxt.exists()
         
+        val installCmd = systemInfo.packageManagerCommands["install"] ?: "install"
+        val updateCmd = systemInfo.packageManagerCommands["update"] ?: "update"
+        
         val analysisPrompt = """
             $systemContext
             
             **Failed Command:** $command
             **Error Message:** $errorMessage
             **Command Output:** ${output.take(2000)}
+            **Workspace Root:** $workspaceRoot
             **Project Context:**
             - Has package.json: $hasPackageJson
             - Has requirements.txt: $hasRequirements
             - Package Manager: ${systemInfo.packageManager}
+            - Install Command: $installCmd
+            - Update Command: $updateCmd
             
             Analyze the command failure and provide:
             1. **Reason**: Brief explanation of why the command failed
             2. **Fallback Plans**: List of alternative commands/approaches to try (max 3)
             
             For each fallback plan, provide:
-            - command: The actual command to run
+            - command: The actual command to run (DO NOT use hardcoded paths like /path/to/project, use relative paths or commands that work from the workspace root)
             - description: What this fallback does
             - should_retry_original: Whether to retry the original command after this fallback (true/false)
             
+            IMPORTANT RULES:
+            - Use the actual package manager install command: "$installCmd" (NOT just "install")
+            - For Node.js: Use "npm install" or "npm install -g <package>" (npm will be installed with nodejs)
+            - For Python: Use "pip3 install" or "python3 -m pip install"
+            - DO NOT use hardcoded paths like "/path/to/project" - commands will be run from workspace root: $workspaceRoot
+            - DO NOT use "cd" commands with hardcoded paths - use relative paths or just the command
+            - For installing system packages, use: "$installCmd <package>" or "$updateCmd && $installCmd <package>"
+            
             Common fallback scenarios:
-            - Missing dependencies: Install them first
-            - Missing tools: Install via package manager
-            - Python venv: Activate virtual environment
-            - Node modules: Run npm install
-            - Path issues: Use absolute paths or cd to correct directory
+            - Missing Node.js/npm: Use "$installCmd nodejs npm" or "$updateCmd && $installCmd nodejs npm"
+            - Missing Python/pip: Use "$installCmd python3 python3-pip" or "$updateCmd && $installCmd python3 python3-pip"
+            - Missing dependencies: Install them first (npm install, pip install -r requirements.txt, etc.)
+            - Missing tools: Install via package manager using "$installCmd <tool-name>"
+            - Python venv: Activate virtual environment (source venv/bin/activate)
+            - Node modules: Run "npm install" (from workspace root)
+            - Path issues: Commands run from workspace root, no need for cd
             - Permission issues: Check file permissions
             - Wrong command syntax: Try alternative syntax
             
@@ -4116,8 +4132,8 @@ exports.$functionName = (req, res, next) => {
                   "should_retry_original": true
                 },
                 {
-                  "command": "python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt",
-                  "description": "Create venv and install dependencies",
+                  "command": "$installCmd nodejs npm",
+                  "description": "Install Node.js and npm via package manager",
                   "should_retry_original": true
                 }
               ]
