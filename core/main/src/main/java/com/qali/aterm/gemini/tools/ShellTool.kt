@@ -49,21 +49,43 @@ class ShellToolInvocation(
         
         return try {
             val workingDir = if (params.dir_path != null) {
-                File(workspaceRoot, params.dir_path)
+                val dir = File(workspaceRoot, params.dir_path)
+                // Try to create directory if it doesn't exist
+                if (!dir.exists()) {
+                    try {
+                        dir.mkdirs()
+                        android.util.Log.d("ShellTool", "Created working directory: ${dir.absolutePath}")
+                    } catch (e: Exception) {
+                        android.util.Log.w("ShellTool", "Failed to create directory, using workspace root: ${e.message}")
+                        // Fallback to workspace root if directory creation fails
+                        File(workspaceRoot)
+                    }
+                } else {
+                    dir
+                }
             } else {
                 File(workspaceRoot)
             }
             
-            // Ensure working directory exists
-            if (!workingDir.exists()) {
-                return ToolResult(
-                    llmContent = "Working directory does not exist: ${workingDir.absolutePath}",
-                    returnDisplay = "Error: Directory not found",
-                    error = ToolError(
-                        message = "Working directory does not exist: ${workingDir.absolutePath}",
-                        type = ToolErrorType.FILE_NOT_FOUND
+            // Ensure working directory exists (should exist now after mkdirs, but double-check)
+            val finalWorkingDir = if (!workingDir.exists()) {
+                // Last resort: use workspace root
+                val fallbackDir = File(workspaceRoot)
+                if (fallbackDir.exists()) {
+                    android.util.Log.w("ShellTool", "Working directory ${workingDir.absolutePath} not found, using workspace root")
+                    fallbackDir
+                } else {
+                    return ToolResult(
+                        llmContent = "Working directory does not exist: ${workingDir.absolutePath}. Workspace root also not found: ${workspaceRoot}",
+                        returnDisplay = "Error: Directory not found",
+                        error = ToolError(
+                            message = "Working directory does not exist: ${workingDir.absolutePath}",
+                            type = ToolErrorType.FILE_NOT_FOUND
+                        )
                     )
-                )
+                }
+            } else {
+                workingDir
             }
             
             // Use withContext to ensure we're on the right thread for process operations
@@ -72,12 +94,12 @@ class ShellToolInvocation(
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     try {
                         android.util.Log.d("ShellTool", "Executing command: ${params.command}")
-                        android.util.Log.d("ShellTool", "Working directory: ${workingDir.absolutePath}")
+                        android.util.Log.d("ShellTool", "Working directory: ${finalWorkingDir.absolutePath}")
                         
                         // Build process with environment
                         val processBuilder = ProcessBuilder()
                             .command("sh", "-c", params.command)
-                            .directory(workingDir)
+                            .directory(finalWorkingDir)
                             .redirectErrorStream(true)
                         
                         // Set up environment variables matching rootfs/terminal session environment
@@ -93,7 +115,7 @@ class ShellToolInvocation(
                         env["LANG"] = "C.UTF-8"
                         // Add workspace root to environment for scripts that need it
                         env["WORKSPACE_ROOT"] = workspaceRoot
-                        env["PWD"] = workingDir.absolutePath
+                        env["PWD"] = finalWorkingDir.absolutePath
                         
                         val process = processBuilder.start()
                         android.util.Log.d("ShellTool", "Process started successfully")

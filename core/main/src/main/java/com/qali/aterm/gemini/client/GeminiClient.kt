@@ -3173,19 +3173,30 @@ exports.$functionName = (req, res, next) => {
             val codePrompt = """
                 $systemContext
                 
-                Generate the COMPLETE, FULL code for file: $filePath
+                Generate the COMPLETE, FULL, FUNCTIONAL code for file: $filePath
                 
-                **CRITICAL INSTRUCTIONS:**
+                **CRITICAL INSTRUCTIONS FOR COMPLETE FUNCTIONALITY:**
                 - You MUST use ONLY the metadata provided below
                 - You MUST include ALL classes, functions, imports, and exports specified
                 - You MUST respect the relationships and dependencies
-                - Generate complete, working, production-ready code
+                - Generate complete, working, production-ready code that is FULLY FUNCTIONAL
                 - Do NOT use placeholders or TODOs unless explicitly needed
                 - Ensure all imports are correct and match the metadata
                 - Follow the file type conventions: $fileType
                 - Ensure consistency with already-generated files (see context below)
                 - Make sure imports reference actual files that exist or will exist
                 - Ensure function/class names match exactly with what other files expect
+                
+                **COMPLETENESS REQUIREMENTS (CRITICAL):**
+                - For games/applications: Include ALL initialization code (DOMContentLoaded, window.onload, etc.)
+                - For games/applications: Include ALL event handlers and bindings (click, input, etc.)
+                - For games/applications: Include ALL game logic (start game, make move, check win, etc.)
+                - For interactive apps: Ensure ALL user interactions are wired up and functional
+                - For web apps: Include ALL DOM manipulation and event listeners
+                - For Node.js apps: Include ALL server startup and route handlers
+                - For Python apps: Include ALL main execution blocks and function calls
+                - NO MISSING PIECES: Every function must be complete, every event must be bound, every feature must work
+                - The code MUST be immediately runnable and functional - no setup steps missing
                 
                 **File Metadata:**
                 - Description: $description
@@ -3203,8 +3214,14 @@ exports.$functionName = (req, res, next) => {
                 $relatedFilesContext
                 $allFilesContext
                 
-                Generate the complete code now. Return ONLY the code, no explanations or markdown formatting.
-                Ensure the code is functional, coherent, and integrates properly with related files.
+                **EXAMPLES OF WHAT MUST BE INCLUDED:**
+                - If it's a game: game initialization, event listeners for moves/clicks, win/lose detection, UI updates
+                - If it's a web app: DOM ready handlers, all button/input event bindings, all API calls
+                - If it's a Node.js app: server.listen(), all route handlers, middleware setup
+                - If it's interactive: ALL user interaction handlers must be present and functional
+                
+                Generate the complete, fully functional code now. Return ONLY the code, no explanations or markdown formatting.
+                The code MUST be immediately runnable and work end-to-end without missing pieces.
             """.trimIndent()
             
             // Make code generation request
