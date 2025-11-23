@@ -110,10 +110,6 @@ object MkSession {
                 writeText(initScriptContent)
             }
 
-
-            // Get rootfs filename for current working mode
-            val rootfsFileName = com.qali.aterm.ui.screens.terminal.Rootfs.getRootfsFileName(workingMode)
-            
             val env = mutableListOf(
                 "PATH=${System.getenv("PATH")}:/sbin:${localBinDir().absolutePath}",
                 "HOME=/sdcard",
