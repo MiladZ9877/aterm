@@ -4013,14 +4013,83 @@ exports.$functionName = (req, res, next) => {
             emit(GeminiStreamEvent.Chunk("🔨 Applying ${fixes.size} fix(es) to $filePath...\n"))
             onChunk("🔨 Applying ${fixes.size} fix(es) to $filePath...\n")
             
+            // Read the file first to help with matching
+            val fileContent = try {
+                val readResult = executeToolSync("read_file", mapOf("file_path" to filePath))
+                if (readResult.error == null) readResult.llmContent else null
+            } catch (e: Exception) {
+                null
+            }
+            
             var successCount = 0
             var failCount = 0
             
             for (fix in fixes) {
-                val oldString = fix.getString("old_string")
+                var oldString = fix.getString("old_string")
                 val newString = fix.getString("new_string")
                 val confidence = fix.optString("confidence", "medium")
                 val description = fix.optString("description", "")
+                
+                // If we have file content and old_string doesn't match, try to find a better anchor
+                if (fileContent != null && !fileContent.contains(oldString)) {
+                    emit(GeminiStreamEvent.Chunk("⚠️ old_string not found, searching for better anchor...\n"))
+                    onChunk("⚠️ old_string not found, searching for better anchor...\n")
+                    
+                    val improvedAnchor = findBetterAnchor(fileContent, oldString, newString)
+                    if (improvedAnchor != null) {
+                        oldString = improvedAnchor
+                        emit(GeminiStreamEvent.Chunk("✅ Found better anchor\n"))
+                        onChunk("✅ Found better anchor\n")
+                    } else {
+                        // If we can't find a good anchor, try to append the new content
+                        if (newString.contains("exports.") || newString.contains("function ")) {
+                            emit(GeminiStreamEvent.Chunk("⚠️ Using append strategy for function addition...\n"))
+                            onChunk("⚠️ Using append strategy for function addition...\n")
+                            
+                            // Try to append at the end of the file
+                            val lastLine = fileContent.lines().lastOrNull() ?: ""
+                            oldString = lastLine
+                            val appendNewString = if (lastLine.isNotEmpty() && !lastLine.endsWith("\n")) {
+                                "\n\n$newString"
+                            } else {
+                                newString
+                            }
+                            
+                            val appendEditCall = FunctionCall(
+                                name = "edit",
+                                args = mapOf(
+                                    "file_path" to filePath,
+                                    "old_string" to oldString,
+                                    "new_string" to (oldString + appendNewString)
+                                )
+                            )
+                            
+                            emit(GeminiStreamEvent.ToolCall(appendEditCall))
+                            onToolCall(appendEditCall)
+                            
+                            val appendResult = try {
+                                executeToolSync("edit", appendEditCall.args)
+                            } catch (e: Exception) {
+                                ToolResult(
+                                    llmContent = "Error: ${e.message}",
+                                    returnDisplay = "Error",
+                                    error = ToolError(
+                                        message = e.message ?: "Unknown error",
+                                        type = ToolErrorType.EXECUTION_ERROR
+                                    )
+                                )
+                            }
+                            
+                            emit(GeminiStreamEvent.ToolResult("edit", appendResult))
+                            onToolResult("edit", appendEditCall.args)
+                            
+                            if (appendResult.error == null) {
+                                successCount++
+                                continue
+                            }
+                        }
+                    }
+                }
                 
                 val editCall = FunctionCall(
                     name = "edit",
@@ -4054,8 +4123,8 @@ exports.$functionName = (req, res, next) => {
                     successCount++
                 } else {
                     failCount++
-                    emit(GeminiStreamEvent.Chunk("⚠️ Fix failed: ${editResult.error.message}\n"))
-                    onChunk("⚠️ Fix failed: ${editResult.error.message}\n")
+                    emit(GeminiStreamEvent.Chunk("❌ Fix failed: ${editResult.error?.message}\n"))
+                    onChunk("❌ Fix failed: ${editResult.error?.message}\n")
                 }
             }
             
