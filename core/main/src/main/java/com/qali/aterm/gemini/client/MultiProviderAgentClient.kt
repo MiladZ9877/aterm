@@ -3883,6 +3883,7 @@ exports.$functionName = (req, res, next) => {
             
             // Check for failure keywords in output
             val outputText = result.llmContent ?: ""
+            val errorMsg = result.error?.message ?: ""
             val hasFailure = result.error != null || detectFailureKeywords(outputText)
             
             if (!hasFailure) {
@@ -3891,11 +3892,51 @@ exports.$functionName = (req, res, next) => {
                 onChunk(successMsg)
                 return true
             } else {
+                // Classify error type
+                val errorType = classifyErrorType(outputText, errorMsg, command.primaryCommand)
+                
+                // If it's a code error, debug the code first before trying fallbacks
+                if (errorType == ErrorType.CODE_ERROR) {
+                    emit(GeminiStreamEvent.Chunk("🐛 Code error detected - debugging code first...\n"))
+                    onChunk("🐛 Code error detected - debugging code first...\n")
+                    
+                    val debugSuccess = debugCodeError(
+                        command.primaryCommand,
+                        outputText,
+                        errorMsg,
+                        workspaceRoot,
+                        systemInfo,
+                        emit,
+                        onChunk,
+                        onToolCall,
+                        onToolResult
+                    )
+                    
+                    if (debugSuccess) {
+                        emit(GeminiStreamEvent.Chunk("✅ Code fixed, retrying command...\n"))
+                        onChunk("✅ Code fixed, retrying command...\n")
+                        
+                        // Retry the original command after fixing code
+                        val retryResult = executeToolSync("shell", primaryCall.args)
+                        emit(GeminiStreamEvent.ToolResult("shell", retryResult))
+                        onToolResult("shell", primaryCall.args)
+                        
+                        val retryOutput = retryResult.llmContent ?: ""
+                        val retryHasFailure = retryResult.error != null || detectFailureKeywords(retryOutput)
+                        
+                        if (!retryHasFailure) {
+                            emit(GeminiStreamEvent.Chunk("✅ Command succeeded after code fix!\n"))
+                            onChunk("✅ Command succeeded after code fix!\n")
+                            return true
+                        }
+                    }
+                }
+                
                 // Analyze failure and generate fallback plans
                 val failureAnalysis = analyzeCommandFailure(
                     command.primaryCommand,
                     outputText,
-                    result.error?.message ?: "",
+                    errorMsg,
                     workspaceRoot,
                     systemInfo
                 )
@@ -4019,25 +4060,165 @@ exports.$functionName = (req, res, next) => {
     }
     
     /**
-     * Detect failure keywords in command output
+     * Error type classification
+     */
+    private enum class ErrorType {
+        COMMAND_NOT_FOUND,      // Command/tool not installed
+        CODE_ERROR,             // Syntax/runtime error in code
+        DEPENDENCY_MISSING,     // Missing dependencies
+        PERMISSION_ERROR,       // Permission/access issues
+        CONFIGURATION_ERROR,    // Configuration/wrong setup
+        NETWORK_ERROR,          // Network/connection issues
+        UNKNOWN                 // Unknown error type
+    }
+    
+    /**
+     * Detect failure keywords in command output with comprehensive patterns
      */
     private fun detectFailureKeywords(output: String): Boolean {
         if (output.isEmpty()) return false
         
+        val outputLower = output.lowercase()
+        
+        // Comprehensive failure keywords
         val failureKeywords = listOf(
-            "error", "failed", "failure", "fatal", "exception",
-            "cannot", "can't", "unable", "not found", "missing",
-            "command not found", "permission denied", "access denied",
-            "syntax error", "parse error", "type error", "reference error",
-            "module not found", "package not found", "dependency",
-            "exit code", "exit status", "non-zero", "returned 1",
-            "failed to", "unexpected", "invalid", "bad", "wrong"
+            // General errors
+            "error", "failed", "failure", "fatal", "exception", "crash", "abort",
+            "cannot", "can't", "unable", "not found", "missing", "not available",
+            "command not found", "permission denied", "access denied", "forbidden",
+            "syntax error", "parse error", "type error", "reference error", "name error",
+            "module not found", "package not found", "dependency", "import error",
+            "exit code", "exit status", "non-zero", "returned 1", "returned 2",
+            "failed to", "unexpected", "invalid", "bad", "wrong", "incorrect",
+            "undefined", "null pointer", "null reference", "nullpointerexception",
+            "timeout", "timed out", "connection refused", "connection reset",
+            "eaddrinuse", "eacces", "enoent", "eexist", "eisdir", "enotdir",
+            "segmentation fault", "segfault", "bus error", "stack overflow",
+            "out of memory", "memory error", "allocation failed",
+            "cannot read", "cannot write", "read-only", "readonly",
+            "no such file", "no such directory", "file not found", "directory not found",
+            "is a directory", "not a directory", "not a file",
+            "already exists", "file exists", "directory exists",
+            "broken pipe", "broken link", "symbolic link",
+            "invalid argument", "invalid option", "invalid syntax",
+            "uncaught exception", "unhandled exception", "uncaught error",
+            "traceback", "stack trace", "call stack",
+            "deprecated", "deprecation warning", "deprecation",
+            "warning", "warn", "caution",
+            // Exit codes
+            "exit code 1", "exit code 2", "exit code 127", "exit code 128",
+            "exit status 1", "exit status 2", "exit status 127",
+            // Command-specific
+            "npm err", "yarn error", "pip error", "python error",
+            "node: command not found", "npm: command not found",
+            "python: command not found", "pip: command not found",
+            "gcc: command not found", "make: command not found",
+            "go: command not found", "cargo: command not found",
+            "java: command not found", "javac: command not found",
+            "mvn: command not found", "gradle: command not found",
+            // Code errors
+            "syntaxerror", "syntax error", "indentationerror", "indentation error",
+            "typeerror", "type error", "referenceerror", "reference error",
+            "nameerror", "name error", "attributeerror", "attribute error",
+            "valueerror", "value error", "keyerror", "key error",
+            "indexerror", "index error", "ioerror", "io error",
+            "oserror", "os error", "runtimeerror", "runtime error",
+            "zerodivisionerror", "zero division", "division by zero",
+            "filenotfounderror", "file not found error",
+            "permissionerror", "permission error",
+            "import error", "importerror", "modulenotfounderror",
+            "cannot import", "failed to import", "import failed",
+            "undefined variable", "undefined function", "undefined method",
+            "undefined is not a function", "cannot read property",
+            "cannot read properties", "cannot access",
+            "is not defined", "is not a function", "is not a constructor",
+            "expected", "unexpected token", "unexpected end",
+            "missing", "missing required", "required parameter",
+            "invalid", "invalid character", "invalid token",
+            "unterminated", "unclosed", "missing closing",
+            // Test failures
+            "test failed", "tests failed", "test suite failed",
+            "assertion failed", "assertionerror", "assert failed",
+            "expected but got", "expected true but got false",
+            "test error", "test exception", "test timeout"
         )
         
-        val outputLower = output.lowercase()
         return failureKeywords.any { keyword ->
             outputLower.contains(keyword, ignoreCase = true)
         }
+    }
+    
+    /**
+     * Classify error type from output
+     */
+    private fun classifyErrorType(output: String, errorMessage: String, command: String): ErrorType {
+        val outputLower = output.lowercase()
+        val errorLower = errorMessage.lowercase()
+        val commandLower = command.lowercase()
+        val combined = "$outputLower $errorLower $commandLower"
+        
+        // Command not found
+        if (combined.contains("command not found") || 
+            combined.contains("not found") && (combined.contains("node") || combined.contains("npm") || 
+            combined.contains("python") || combined.contains("pip") || combined.contains("go") ||
+            combined.contains("cargo") || combined.contains("java") || combined.contains("mvn") ||
+            combined.contains("gradle") || combined.contains("gcc") || combined.contains("make"))) {
+            return ErrorType.COMMAND_NOT_FOUND
+        }
+        
+        // Code errors (syntax, runtime, import errors)
+        if (combined.contains("syntax error") || combined.contains("syntaxerror") ||
+            combined.contains("parse error") || combined.contains("parseerror") ||
+            combined.contains("type error") || combined.contains("typeerror") ||
+            combined.contains("reference error") || combined.contains("referenceerror") ||
+            combined.contains("name error") || combined.contains("nameerror") ||
+            combined.contains("attribute error") || combined.contains("attributeerror") ||
+            combined.contains("import error") || combined.contains("importerror") ||
+            combined.contains("module not found") || combined.contains("modulenotfound") ||
+            combined.contains("cannot import") || combined.contains("failed to import") ||
+            combined.contains("undefined") || combined.contains("is not defined") ||
+            combined.contains("traceback") || combined.contains("stack trace") ||
+            combined.contains("uncaught exception") || combined.contains("unhandled exception") ||
+            combined.contains("runtime error") || combined.contains("runtimeerror") ||
+            combined.contains("null pointer") || combined.contains("nullpointer") ||
+            combined.contains("cannot read property") || combined.contains("cannot access")) {
+            return ErrorType.CODE_ERROR
+        }
+        
+        // Dependency missing
+        if (combined.contains("module not found") || combined.contains("package not found") ||
+            combined.contains("dependency") || combined.contains("missing dependency") ||
+            combined.contains("cannot find module") || combined.contains("cannot resolve") ||
+            combined.contains("npm err") || combined.contains("yarn error") ||
+            combined.contains("pip error") || combined.contains("no module named") ||
+            combined.contains("package.json") && combined.contains("not found")) {
+            return ErrorType.DEPENDENCY_MISSING
+        }
+        
+        // Permission errors
+        if (combined.contains("permission denied") || combined.contains("permissionerror") ||
+            combined.contains("access denied") || combined.contains("forbidden") ||
+            combined.contains("eacces") || combined.contains("read-only") ||
+            combined.contains("cannot write") || combined.contains("cannot read")) {
+            return ErrorType.PERMISSION_ERROR
+        }
+        
+        // Network errors
+        if (combined.contains("connection refused") || combined.contains("connection reset") ||
+            combined.contains("timeout") || combined.contains("timed out") ||
+            combined.contains("network error") || combined.contains("dns") ||
+            combined.contains("econnrefused") || combined.contains("econnreset")) {
+            return ErrorType.NETWORK_ERROR
+        }
+        
+        // Configuration errors
+        if (combined.contains("invalid") || combined.contains("wrong") ||
+            combined.contains("incorrect") || combined.contains("bad") ||
+            combined.contains("configuration") || combined.contains("config error")) {
+            return ErrorType.CONFIGURATION_ERROR
+        }
+        
+        return ErrorType.UNKNOWN
     }
     
     /**
@@ -4058,7 +4239,618 @@ exports.$functionName = (req, res, next) => {
     )
     
     /**
-     * Analyze command failure and generate fallback plans using AI
+     * Debug and fix code errors (syntax errors, runtime errors, import errors)
+     * Returns true if code was successfully fixed
+     */
+    private suspend fun debugCodeError(
+        command: String,
+        output: String,
+        errorMessage: String,
+        workspaceRoot: String,
+        systemInfo: SystemInfoService.SystemInfo,
+        emit: suspend (GeminiStreamEvent) -> Unit,
+        onChunk: (String) -> Unit,
+        onToolCall: (FunctionCall) -> Unit,
+        onToolResult: (String, Map<String, Any>) -> Unit
+    ): Boolean {
+        val workspaceDir = File(workspaceRoot)
+        if (!workspaceDir.exists()) return false
+        
+        // Extract file path and line number from error output
+        val filePathRegex = Regex("""(?:File|file|at)\s+["']?([^"'\s]+\.(?:js|ts|jsx|tsx|py|java|kt|go|rs|rb|php))["']?""")
+        val lineNumberRegex = Regex("""(?:line|Line|:)\s*(\d+)""")
+        
+        val fileMatch = filePathRegex.find(output)
+        val lineMatch = lineNumberRegex.find(output)
+        
+        val errorFile = fileMatch?.groupValues?.get(1)
+        val errorLine = lineMatch?.groupValues?.get(1)?.toIntOrNull()
+        
+        if (errorFile == null) {
+            android.util.Log.d("GeminiClient", "Could not extract file path from error")
+            return false
+        }
+        
+        // Resolve file path (could be relative or absolute)
+        val targetFile = when {
+            File(errorFile).isAbsolute -> File(errorFile)
+            else -> File(workspaceDir, errorFile)
+        }
+        
+        if (!targetFile.exists()) {
+            android.util.Log.d("GeminiClient", "Error file not found: ${targetFile.absolutePath}")
+            return false
+        }
+        
+        emit(GeminiStreamEvent.Chunk("📝 Found error in: ${targetFile.name}${if (errorLine != null) " at line $errorLine" else ""}\n"))
+        onChunk("📝 Found error in: ${targetFile.name}${if (errorLine != null) " at line $errorLine" else ""}\n")
+        
+        try {
+            val fileContent = targetFile.readText()
+            val errorContext = if (errorLine != null && errorLine > 0) {
+                val lines = fileContent.lines()
+                val startLine = maxOf(0, errorLine - 5)
+                val endLine = minOf(lines.size, errorLine + 5)
+                lines.subList(startLine, endLine).joinToString("\n")
+            } else {
+                fileContent.take(1000)
+            }
+            
+            // Use AI to analyze and fix the code error
+            val debugPrompt = """
+                Analyze and fix the code error in the file.
+                
+                **File:** ${targetFile.name}
+                **Error Output:** ${output.take(1500)}
+                **Error Message:** ${errorMessage.take(500)}
+                **Command:** $command
+                
+                **Code Context (around error):**
+                ```${targetFile.extension}
+                $errorContext
+                ```
+                
+                Provide a fix using the edit tool with:
+                - file_path: ${targetFile.relativeTo(workspaceDir).path}
+                - old_string: The problematic code section
+                - new_string: The fixed code
+                
+                Focus on fixing:
+                - Syntax errors (missing brackets, quotes, etc.)
+                - Import errors (wrong imports, missing modules)
+                - Type errors (wrong types, undefined variables)
+                - Runtime errors (null pointers, undefined properties)
+                
+                Return JSON with the fix:
+                {
+                  "file_path": "${targetFile.relativeTo(workspaceDir).path}",
+                  "old_string": "problematic code",
+                  "new_string": "fixed code"
+                }
+            """.trimIndent()
+            
+            val model = ApiProviderManager.getCurrentModel()
+            val request = JSONObject().apply {
+                put("contents", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("text", debugPrompt)
+                            })
+                        })
+                    })
+                })
+                put("systemInstruction", JSONObject().apply {
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("text", SystemInfoService.generateSystemContext())
+                        })
+                    })
+                })
+            }
+            
+            val apiKey = ApiProviderManager.getNextApiKey() ?: return false
+            
+            val response = withContext(Dispatchers.IO) {
+                makeApiCallSimple(apiKey, model, request, useLongTimeout = false)
+            }
+            
+            if (response.isEmpty()) return false
+            
+            // Parse JSON response and apply fix
+            val jsonStart = response.indexOf('{')
+            val jsonEnd = response.lastIndexOf('}') + 1
+            if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                val json = JSONObject(response.substring(jsonStart, jsonEnd))
+                val fixFilePath = json.optString("file_path", "")
+                val oldString = json.optString("old_string", "")
+                val newString = json.optString("new_string", "")
+                
+                if (fixFilePath.isNotEmpty() && oldString.isNotEmpty() && newString.isNotEmpty()) {
+                    val fixFile = File(workspaceDir, fixFilePath)
+                    if (fixFile.exists()) {
+                        emit(GeminiStreamEvent.Chunk("🔧 Applying code fix...\n"))
+                        onChunk("🔧 Applying code fix...\n")
+                        
+                        val editCall = FunctionCall(
+                            name = "edit",
+                            args = mapOf(
+                                "file_path" to fixFilePath,
+                                "old_string" to oldString,
+                                "new_string" to newString
+                            )
+                        )
+                        emit(GeminiStreamEvent.ToolCall(editCall))
+                        onToolCall(editCall)
+                        
+                        val editResult = executeToolSync("edit", editCall.args)
+                        emit(GeminiStreamEvent.ToolResult("edit", editResult))
+                        onToolResult("edit", editCall.args)
+                        
+                        if (editResult.error == null) {
+                            emit(GeminiStreamEvent.Chunk("✅ Code fix applied successfully\n"))
+                            onChunk("✅ Code fix applied successfully\n")
+                            return true
+                        } else {
+                            emit(GeminiStreamEvent.Chunk("⚠️ Failed to apply code fix: ${editResult.error?.message}\n"))
+                            onChunk("⚠️ Failed to apply code fix: ${editResult.error?.message}\n")
+                        }
+                    }
+                }
+            }
+            
+            return false
+        } catch (e: Exception) {
+            android.util.Log.e("GeminiClient", "Failed to debug code error: ${e.message}", e)
+            emit(GeminiStreamEvent.Chunk("⚠️ Code debugging failed: ${e.message}\n"))
+            onChunk("⚠️ Code debugging failed: ${e.message}\n")
+            return false
+        }
+    }
+    
+    /**
+     * Get hardcoded fallback commands based on error type and system info
+     * This reduces API calls by using pre-defined fallbacks
+     */
+    private fun getHardcodedFallbacks(
+        errorType: ErrorType,
+        command: String,
+        output: String,
+        workspaceRoot: String,
+        systemInfo: SystemInfoService.SystemInfo
+    ): List<FallbackPlan> {
+        val fallbacks = mutableListOf<FallbackPlan>()
+        val workspaceDir = File(workspaceRoot)
+        val installCmd = systemInfo.packageManagerCommands["install"] ?: "install"
+        val updateCmd = systemInfo.packageManagerCommands["update"] ?: "update"
+        val commandLower = command.lowercase()
+        val outputLower = output.lowercase()
+        
+        // Detect project type
+        val hasPackageJson = File(workspaceDir, "package.json").exists()
+        val hasRequirements = File(workspaceDir, "requirements.txt").exists()
+        val hasGoMod = File(workspaceDir, "go.mod").exists()
+        val hasCargoToml = File(workspaceDir, "Cargo.toml").exists()
+        val hasGradle = File(workspaceDir, "build.gradle").exists() || File(workspaceDir, "build.gradle.kts").exists()
+        val hasMaven = File(workspaceDir, "pom.xml").exists()
+        val hasPipfile = File(workspaceDir, "Pipfile").exists()
+        val hasPoetry = File(workspaceDir, "pyproject.toml").exists() && File(workspaceDir, "poetry.lock").exists()
+        val venvExists = File(workspaceDir, "venv").exists() || File(workspaceDir, ".venv").exists()
+        val hasYarn = File(workspaceDir, "yarn.lock").exists()
+        val hasPnpm = File(workspaceDir, "pnpm-lock.yaml").exists()
+        
+        when (errorType) {
+            ErrorType.COMMAND_NOT_FOUND -> {
+                // Node.js/npm not found
+                if (commandLower.contains("node") || commandLower.contains("npm")) {
+                    when (systemInfo.packageManager) {
+                        "apk" -> {
+                            fallbacks.add(FallbackPlan("apk add nodejs npm", "Install Node.js and npm via apk", true))
+                            fallbacks.add(FallbackPlan("apk update && apk add nodejs npm", "Update apk and install Node.js/npm", true))
+                            fallbacks.add(FallbackPlan("apk add nodejs-current npm", "Install current Node.js version", true))
+                        }
+                        "apt", "apt-get" -> {
+                            fallbacks.add(FallbackPlan("apt-get update && apt-get install -y nodejs npm", "Update apt and install Node.js/npm", true))
+                            fallbacks.add(FallbackPlan("curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get install -y nodejs", "Install Node.js from NodeSource", true))
+                        }
+                        "yum" -> {
+                            fallbacks.add(FallbackPlan("yum install -y nodejs npm", "Install Node.js and npm via yum", true))
+                            fallbacks.add(FallbackPlan("curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - && yum install -y nodejs", "Install Node.js from NodeSource", true))
+                        }
+                        "dnf" -> {
+                            fallbacks.add(FallbackPlan("dnf install -y nodejs npm", "Install Node.js and npm via dnf", true))
+                            fallbacks.add(FallbackPlan("curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash - && dnf install -y nodejs", "Install Node.js from NodeSource", true))
+                        }
+                        "pacman" -> {
+                            fallbacks.add(FallbackPlan("pacman -S --noconfirm nodejs npm", "Install Node.js and npm via pacman", true))
+                        }
+                        "brew" -> {
+                            fallbacks.add(FallbackPlan("brew install node", "Install Node.js via Homebrew", true))
+                        }
+                    }
+                }
+                
+                // Python/pip not found
+                if (commandLower.contains("python") || commandLower.contains("pip")) {
+                    val pythonPkg = when (systemInfo.os) {
+                        "Windows" -> "python"
+                        else -> "python3"
+                    }
+                    when (systemInfo.packageManager) {
+                        "apk" -> {
+                            fallbacks.add(FallbackPlan("apk add $pythonPkg py3-pip", "Install Python and pip via apk", true))
+                            fallbacks.add(FallbackPlan("apk update && apk add $pythonPkg py3-pip", "Update apk and install Python/pip", true))
+                        }
+                        "apt", "apt-get" -> {
+                            fallbacks.add(FallbackPlan("apt-get update && apt-get install -y $pythonPkg $pythonPkg-pip", "Update apt and install Python/pip", true))
+                            fallbacks.add(FallbackPlan("apt-get install -y $pythonPkg $pythonPkg-venv $pythonPkg-pip", "Install Python with venv and pip", true))
+                        }
+                        "yum" -> {
+                            fallbacks.add(FallbackPlan("yum install -y $pythonPkg $pythonPkg-pip", "Install Python and pip via yum", true))
+                        }
+                        "dnf" -> {
+                            fallbacks.add(FallbackPlan("dnf install -y $pythonPkg $pythonPkg-pip", "Install Python and pip via dnf", true))
+                        }
+                        "pacman" -> {
+                            fallbacks.add(FallbackPlan("pacman -S --noconfirm $pythonPkg python-pip", "Install Python and pip via pacman", true))
+                        }
+                        "brew" -> {
+                            fallbacks.add(FallbackPlan("brew install python3", "Install Python via Homebrew", true))
+                        }
+                    }
+                }
+                
+                // Go not found
+                if (commandLower.contains("go")) {
+                    when (systemInfo.packageManager) {
+                        "apk" -> fallbacks.add(FallbackPlan("apk add go", "Install Go via apk", true))
+                        "apt", "apt-get" -> fallbacks.add(FallbackPlan("apt-get update && apt-get install -y golang-go", "Install Go via apt", true))
+                        "yum" -> fallbacks.add(FallbackPlan("yum install -y golang", "Install Go via yum", true))
+                        "dnf" -> fallbacks.add(FallbackPlan("dnf install -y golang", "Install Go via dnf", true))
+                        "pacman" -> fallbacks.add(FallbackPlan("pacman -S --noconfirm go", "Install Go via pacman", true))
+                        "brew" -> fallbacks.add(FallbackPlan("brew install go", "Install Go via Homebrew", true))
+                    }
+                }
+                
+                // Rust/cargo not found
+                if (commandLower.contains("cargo") || commandLower.contains("rust")) {
+                    fallbacks.add(FallbackPlan("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y", "Install Rust via rustup", true))
+                    when (systemInfo.packageManager) {
+                        "apk" -> fallbacks.add(FallbackPlan("apk add rust cargo", "Install Rust via apk", true))
+                        "apt", "apt-get" -> fallbacks.add(FallbackPlan("apt-get update && apt-get install -y rustc cargo", "Install Rust via apt", true))
+                        "pacman" -> fallbacks.add(FallbackPlan("pacman -S --noconfirm rust", "Install Rust via pacman", true))
+                    }
+                }
+                
+                // PHP/composer not found
+                if (commandLower.contains("php") || commandLower.contains("composer")) {
+                    when (systemInfo.packageManager) {
+                        "apk" -> {
+                            fallbacks.add(FallbackPlan("apk add php php-cli composer", "Install PHP and Composer via apk", true))
+                            fallbacks.add(FallbackPlan("apk add php8 php8-cli composer", "Install PHP 8 and Composer via apk", true))
+                        }
+                        "apt", "apt-get" -> {
+                            fallbacks.add(FallbackPlan("apt-get update && apt-get install -y php php-cli composer", "Install PHP and Composer via apt", true))
+                            fallbacks.add(FallbackPlan("curl -sS https://getcomposer.org/installer | php", "Install Composer manually", true))
+                        }
+                        "yum", "dnf" -> {
+                            fallbacks.add(FallbackPlan("$installCmd php php-cli", "Install PHP via yum/dnf", true))
+                            fallbacks.add(FallbackPlan("curl -sS https://getcomposer.org/installer | php", "Install Composer manually", true))
+                        }
+                        "pacman" -> fallbacks.add(FallbackPlan("pacman -S --noconfirm php composer", "Install PHP and Composer via pacman", true))
+                        "brew" -> fallbacks.add(FallbackPlan("brew install php composer", "Install PHP and Composer via Homebrew", true))
+                    }
+                }
+                
+                // Ruby/bundler not found
+                if (commandLower.contains("ruby") || commandLower.contains("bundle") || commandLower.contains("gem")) {
+                    when (systemInfo.packageManager) {
+                        "apk" -> {
+                            fallbacks.add(FallbackPlan("apk add ruby ruby-dev ruby-bundler", "Install Ruby and Bundler via apk", true))
+                            fallbacks.add(FallbackPlan("apk add ruby ruby-dev && gem install bundler", "Install Ruby and Bundler via apk+gem", true))
+                        }
+                        "apt", "apt-get" -> {
+                            fallbacks.add(FallbackPlan("apt-get update && apt-get install -y ruby ruby-dev bundler", "Install Ruby and Bundler via apt", true))
+                            fallbacks.add(FallbackPlan("apt-get install -y ruby-full && gem install bundler", "Install Ruby full and Bundler", true))
+                        }
+                        "yum", "dnf" -> {
+                            fallbacks.add(FallbackPlan("$installCmd ruby ruby-devel", "Install Ruby via yum/dnf", true))
+                            fallbacks.add(FallbackPlan("gem install bundler", "Install Bundler via gem", true))
+                        }
+                        "pacman" -> fallbacks.add(FallbackPlan("pacman -S --noconfirm ruby", "Install Ruby via pacman", true))
+                        "brew" -> fallbacks.add(FallbackPlan("brew install ruby", "Install Ruby via Homebrew", true))
+                    }
+                }
+                
+                // C/C++ build tools not found
+                if (commandLower.contains("gcc") || commandLower.contains("g++") || commandLower.contains("make") || commandLower.contains("cmake")) {
+                    when (systemInfo.packageManager) {
+                        "apk" -> {
+                            fallbacks.add(FallbackPlan("apk add build-base gcc g++ make cmake", "Install C/C++ build tools via apk", true))
+                            fallbacks.add(FallbackPlan("apk add gcc g++ make", "Install basic C/C++ tools via apk", true))
+                        }
+                        "apt", "apt-get" -> {
+                            fallbacks.add(FallbackPlan("apt-get update && apt-get install -y build-essential gcc g++ make cmake", "Install C/C++ build tools via apt", true))
+                            fallbacks.add(FallbackPlan("apt-get install -y build-essential", "Install build-essential via apt", true))
+                        }
+                        "yum", "dnf" -> {
+                            fallbacks.add(FallbackPlan("$installCmd gcc gcc-c++ make cmake", "Install C/C++ build tools via yum/dnf", true))
+                            fallbacks.add(FallbackPlan("$installCmd @development-tools", "Install development tools group", true))
+                        }
+                        "pacman" -> {
+                            fallbacks.add(FallbackPlan("pacman -S --noconfirm base-devel gcc make cmake", "Install C/C++ build tools via pacman", true))
+                        }
+                        "brew" -> {
+                            fallbacks.add(FallbackPlan("brew install gcc make cmake", "Install C/C++ build tools via Homebrew", true))
+                        }
+                    }
+                }
+                
+                // Git not found
+                if (commandLower.contains("git")) {
+                    when (systemInfo.packageManager) {
+                        "apk" -> fallbacks.add(FallbackPlan("apk add git", "Install Git via apk", true))
+                        "apt", "apt-get" -> fallbacks.add(FallbackPlan("apt-get update && apt-get install -y git", "Install Git via apt", true))
+                        "yum", "dnf" -> fallbacks.add(FallbackPlan("$installCmd git", "Install Git via yum/dnf", true))
+                        "pacman" -> fallbacks.add(FallbackPlan("pacman -S --noconfirm git", "Install Git via pacman", true))
+                        "brew" -> fallbacks.add(FallbackPlan("brew install git", "Install Git via Homebrew", true))
+                    }
+                }
+                
+                // Curl/wget not found
+                if (commandLower.contains("curl") || commandLower.contains("wget")) {
+                    when (systemInfo.packageManager) {
+                        "apk" -> {
+                            if (commandLower.contains("curl")) fallbacks.add(FallbackPlan("apk add curl", "Install curl via apk", true))
+                            if (commandLower.contains("wget")) fallbacks.add(FallbackPlan("apk add wget", "Install wget via apk", true))
+                        }
+                        "apt", "apt-get" -> {
+                            if (commandLower.contains("curl")) fallbacks.add(FallbackPlan("apt-get install -y curl", "Install curl via apt", true))
+                            if (commandLower.contains("wget")) fallbacks.add(FallbackPlan("apt-get install -y wget", "Install wget via apt", true))
+                        }
+                        "yum", "dnf" -> {
+                            if (commandLower.contains("curl")) fallbacks.add(FallbackPlan("$installCmd curl", "Install curl via yum/dnf", true))
+                            if (commandLower.contains("wget")) fallbacks.add(FallbackPlan("$installCmd wget", "Install wget via yum/dnf", true))
+                        }
+                        "pacman" -> {
+                            if (commandLower.contains("curl")) fallbacks.add(FallbackPlan("pacman -S --noconfirm curl", "Install curl via pacman", true))
+                            if (commandLower.contains("wget")) fallbacks.add(FallbackPlan("pacman -S --noconfirm wget", "Install wget via pacman", true))
+                        }
+                        "brew" -> {
+                            if (commandLower.contains("curl")) fallbacks.add(FallbackPlan("brew install curl", "Install curl via Homebrew", true))
+                            if (commandLower.contains("wget")) fallbacks.add(FallbackPlan("brew install wget", "Install wget via Homebrew", true))
+                        }
+                    }
+                }
+                
+                // Docker not found
+                if (commandLower.contains("docker")) {
+                    when (systemInfo.packageManager) {
+                        "apk" -> fallbacks.add(FallbackPlan("apk add docker docker-compose", "Install Docker via apk", true))
+                        "apt", "apt-get" -> {
+                            fallbacks.add(FallbackPlan("apt-get update && apt-get install -y docker.io docker-compose", "Install Docker via apt", true))
+                            fallbacks.add(FallbackPlan("curl -fsSL https://get.docker.com | sh", "Install Docker via official script", true))
+                        }
+                        "yum", "dnf" -> {
+                            fallbacks.add(FallbackPlan("$installCmd docker docker-compose", "Install Docker via yum/dnf", true))
+                            fallbacks.add(FallbackPlan("curl -fsSL https://get.docker.com | sh", "Install Docker via official script", true))
+                        }
+                        "pacman" -> fallbacks.add(FallbackPlan("pacman -S --noconfirm docker docker-compose", "Install Docker via pacman", true))
+                        "brew" -> fallbacks.add(FallbackPlan("brew install docker docker-compose", "Install Docker via Homebrew", true))
+                    }
+                }
+                
+                // PostgreSQL/MySQL client not found
+                if (commandLower.contains("psql") || commandLower.contains("mysql")) {
+                    when (systemInfo.packageManager) {
+                        "apk" -> {
+                            if (commandLower.contains("psql")) fallbacks.add(FallbackPlan("apk add postgresql-client", "Install PostgreSQL client via apk", true))
+                            if (commandLower.contains("mysql")) fallbacks.add(FallbackPlan("apk add mysql-client", "Install MySQL client via apk", true))
+                        }
+                        "apt", "apt-get" -> {
+                            if (commandLower.contains("psql")) fallbacks.add(FallbackPlan("apt-get install -y postgresql-client", "Install PostgreSQL client via apt", true))
+                            if (commandLower.contains("mysql")) fallbacks.add(FallbackPlan("apt-get install -y mysql-client", "Install MySQL client via apt", true))
+                        }
+                        "yum", "dnf" -> {
+                            if (commandLower.contains("psql")) fallbacks.add(FallbackPlan("$installCmd postgresql", "Install PostgreSQL client via yum/dnf", true))
+                            if (commandLower.contains("mysql")) fallbacks.add(FallbackPlan("$installCmd mysql", "Install MySQL client via yum/dnf", true))
+                        }
+                        "pacman" -> {
+                            if (commandLower.contains("psql")) fallbacks.add(FallbackPlan("pacman -S --noconfirm postgresql", "Install PostgreSQL client via pacman", true))
+                            if (commandLower.contains("mysql")) fallbacks.add(FallbackPlan("pacman -S --noconfirm mysql", "Install MySQL client via pacman", true))
+                        }
+                        "brew" -> {
+                            if (commandLower.contains("psql")) fallbacks.add(FallbackPlan("brew install postgresql", "Install PostgreSQL client via Homebrew", true))
+                            if (commandLower.contains("mysql")) fallbacks.add(FallbackPlan("brew install mysql-client", "Install MySQL client via Homebrew", true))
+                        }
+                    }
+                }
+                
+                // Java not found
+                if (commandLower.contains("java") || commandLower.contains("javac") || commandLower.contains("mvn") || commandLower.contains("gradle")) {
+                    when (systemInfo.packageManager) {
+                        "apk" -> {
+                            fallbacks.add(FallbackPlan("apk add openjdk17-jdk", "Install Java 17 via apk", true))
+                            fallbacks.add(FallbackPlan("apk add openjdk11-jdk", "Install Java 11 via apk", true))
+                        }
+                        "apt", "apt-get" -> {
+                            fallbacks.add(FallbackPlan("apt-get update && apt-get install -y openjdk-17-jdk", "Install Java 17 via apt", true))
+                            fallbacks.add(FallbackPlan("apt-get install -y default-jdk", "Install default JDK via apt", true))
+                        }
+                        "yum", "dnf" -> {
+                            fallbacks.add(FallbackPlan("$installCmd java-17-openjdk-devel", "Install Java 17 via yum/dnf", true))
+                            fallbacks.add(FallbackPlan("$installCmd java-11-openjdk-devel", "Install Java 11 via yum/dnf", true))
+                        }
+                        "pacman" -> fallbacks.add(FallbackPlan("pacman -S --noconfirm jdk-openjdk", "Install OpenJDK via pacman", true))
+                        "brew" -> fallbacks.add(FallbackPlan("brew install openjdk@17", "Install OpenJDK 17 via Homebrew", true))
+                    }
+                    
+                    // Maven not found
+                    if (commandLower.contains("mvn")) {
+                        when (systemInfo.packageManager) {
+                            "apk" -> fallbacks.add(FallbackPlan("apk add maven", "Install Maven via apk", true))
+                            "apt", "apt-get" -> fallbacks.add(FallbackPlan("apt-get install -y maven", "Install Maven via apt", true))
+                            "yum", "dnf" -> fallbacks.add(FallbackPlan("$installCmd maven", "Install Maven via yum/dnf", true))
+                            "pacman" -> fallbacks.add(FallbackPlan("pacman -S --noconfirm maven", "Install Maven via pacman", true))
+                            "brew" -> fallbacks.add(FallbackPlan("brew install maven", "Install Maven via Homebrew", true))
+                        }
+                    }
+                    
+                    // Gradle not found
+                    if (commandLower.contains("gradle")) {
+                        when (systemInfo.packageManager) {
+                            "apk" -> fallbacks.add(FallbackPlan("apk add gradle", "Install Gradle via apk", true))
+                            "apt", "apt-get" -> fallbacks.add(FallbackPlan("apt-get install -y gradle", "Install Gradle via apt", true))
+                            "yum", "dnf" -> fallbacks.add(FallbackPlan("$installCmd gradle", "Install Gradle via yum/dnf", true))
+                            "pacman" -> fallbacks.add(FallbackPlan("pacman -S --noconfirm gradle", "Install Gradle via pacman", true))
+                            "brew" -> fallbacks.add(FallbackPlan("brew install gradle", "Install Gradle via Homebrew", true))
+                        }
+                    }
+                }
+            }
+            
+            ErrorType.DEPENDENCY_MISSING -> {
+                // Node.js dependencies
+                if (hasPackageJson) {
+                    when {
+                        hasPnpm -> {
+                            fallbacks.add(FallbackPlan("pnpm install", "Install dependencies via pnpm", true))
+                            fallbacks.add(FallbackPlan("npm install -g pnpm && pnpm install", "Install pnpm globally and dependencies", true))
+                        }
+                        hasYarn -> {
+                            fallbacks.add(FallbackPlan("yarn install", "Install dependencies via yarn", true))
+                            fallbacks.add(FallbackPlan("npm install -g yarn && yarn install", "Install yarn globally and dependencies", true))
+                        }
+                        else -> {
+                            fallbacks.add(FallbackPlan("npm install", "Install dependencies via npm", true))
+                            fallbacks.add(FallbackPlan("npm ci", "Clean install dependencies via npm", true))
+                            fallbacks.add(FallbackPlan("rm -rf node_modules package-lock.json && npm install", "Clean reinstall dependencies", true))
+                        }
+                    }
+                    // If npm not found, try installing it
+                    if (outputLower.contains("npm") && outputLower.contains("not found")) {
+                        when (systemInfo.packageManager) {
+                            "apk" -> fallbacks.add(FallbackPlan("apk add nodejs npm", "Install Node.js and npm via apk", true))
+                            "apt", "apt-get" -> fallbacks.add(FallbackPlan("apt-get update && apt-get install -y nodejs npm", "Install Node.js and npm via apt", true))
+                            "yum", "dnf" -> fallbacks.add(FallbackPlan("$installCmd nodejs npm", "Install Node.js and npm via yum/dnf", true))
+                            "pacman" -> fallbacks.add(FallbackPlan("pacman -S --noconfirm nodejs npm", "Install Node.js and npm via pacman", true))
+                            "brew" -> fallbacks.add(FallbackPlan("brew install node", "Install Node.js via Homebrew", true))
+                        }
+                    }
+                }
+                
+                // Python dependencies
+                if (hasRequirements || hasPipfile || hasPoetry) {
+                    val pythonCmd = if (systemInfo.os == "Windows") "python" else "python3"
+                    val pipCmd = if (systemInfo.os == "Windows") "pip" else "pip3"
+                    val venvActivate = if (systemInfo.os == "Windows") "venv\\Scripts\\activate" else "source venv/bin/activate"
+                    
+                    when {
+                        hasPoetry -> {
+                            fallbacks.add(FallbackPlan("poetry install", "Install dependencies via poetry", true))
+                            fallbacks.add(FallbackPlan("curl -sSL https://install.python-poetry.org | $pythonCmd -", "Install poetry first", true))
+                            fallbacks.add(FallbackPlan("pip3 install poetry && poetry install", "Install poetry via pip and dependencies", true))
+                        }
+                        hasPipfile -> {
+                            fallbacks.add(FallbackPlan("pipenv install", "Install dependencies via pipenv", true))
+                            fallbacks.add(FallbackPlan("pipenv install --dev", "Install dependencies including dev via pipenv", true))
+                            fallbacks.add(FallbackPlan("$pipCmd install pipenv && pipenv install", "Install pipenv and dependencies", true))
+                        }
+                        hasRequirements -> {
+                            if (venvExists) {
+                                fallbacks.add(FallbackPlan("$venvActivate && pip install -r requirements.txt", "Install dependencies in venv", true))
+                                fallbacks.add(FallbackPlan("$venvActivate && pip install --upgrade -r requirements.txt", "Upgrade dependencies in venv", true))
+                            } else {
+                                fallbacks.add(FallbackPlan("$pipCmd install -r requirements.txt", "Install dependencies via pip3", true))
+                                fallbacks.add(FallbackPlan("$pythonCmd -m venv venv && $venvActivate && pip install -r requirements.txt", "Create venv and install dependencies", true))
+                                fallbacks.add(FallbackPlan("$pipCmd install --user -r requirements.txt", "Install dependencies for user", true))
+                            }
+                        }
+                    }
+                }
+                
+                // Go dependencies
+                if (hasGoMod) {
+                    fallbacks.add(FallbackPlan("go mod download", "Download Go dependencies", true))
+                    fallbacks.add(FallbackPlan("go mod tidy", "Tidy Go modules", true))
+                    fallbacks.add(FallbackPlan("go get ./...", "Get all Go dependencies", true))
+                    fallbacks.add(FallbackPlan("go mod vendor", "Vendor Go dependencies", true))
+                }
+                
+                // Rust dependencies
+                if (hasCargoToml) {
+                    fallbacks.add(FallbackPlan("cargo build", "Build Rust project to fetch dependencies", true))
+                    fallbacks.add(FallbackPlan("cargo fetch", "Fetch Rust dependencies", true))
+                    fallbacks.add(FallbackPlan("cargo update", "Update Rust dependencies", true))
+                }
+                
+                // Java/Kotlin dependencies
+                if (hasGradle) {
+                    val gradleWrapper = File(workspaceDir, "gradlew").exists() || File(workspaceDir, "gradlew.bat").exists()
+                    val gradleCmd = if (gradleWrapper) {
+                        if (systemInfo.os == "Windows") "./gradlew.bat" else "./gradlew"
+                    } else {
+                        "gradle"
+                    }
+                    fallbacks.add(FallbackPlan("$gradleCmd build --refresh-dependencies", "Build with refresh dependencies", true))
+                    fallbacks.add(FallbackPlan("$gradleCmd dependencies", "Check Gradle dependencies", false))
+                }
+                
+                if (hasMaven) {
+                    fallbacks.add(FallbackPlan("mvn dependency:resolve", "Resolve Maven dependencies", true))
+                    fallbacks.add(FallbackPlan("mvn clean install", "Clean and install Maven dependencies", true))
+                    fallbacks.add(FallbackPlan("mvn dependency:purge-local-repository && mvn install", "Purge and reinstall dependencies", true))
+                }
+                
+                // PHP dependencies
+                val hasComposer = File(workspaceDir, "composer.json").exists()
+                if (hasComposer) {
+                    fallbacks.add(FallbackPlan("composer install", "Install PHP dependencies via Composer", true))
+                    fallbacks.add(FallbackPlan("composer update", "Update PHP dependencies", true))
+                    fallbacks.add(FallbackPlan("composer dump-autoload", "Regenerate Composer autoload", true))
+                }
+                
+                // Ruby dependencies
+                val hasGemfile = File(workspaceDir, "Gemfile").exists()
+                if (hasGemfile) {
+                    fallbacks.add(FallbackPlan("bundle install", "Install Ruby dependencies via Bundler", true))
+                    fallbacks.add(FallbackPlan("bundle update", "Update Ruby dependencies", true))
+                    fallbacks.add(FallbackPlan("gem install bundler && bundle install", "Install Bundler and dependencies", true))
+                }
+            }
+            
+            ErrorType.CODE_ERROR -> {
+                // Code errors need debugging, not just retrying commands
+                // Return empty list - will be handled by code debugging logic
+                return emptyList()
+            }
+            
+            ErrorType.PERMISSION_ERROR -> {
+                fallbacks.add(FallbackPlan("chmod +x ${command.split(" ").firstOrNull() ?: ""}", "Make command executable", false))
+                if (hasPackageJson) {
+                    fallbacks.add(FallbackPlan("npm install", "Reinstall dependencies (may fix permission issues)", false))
+                }
+            }
+            
+            ErrorType.CONFIGURATION_ERROR, ErrorType.NETWORK_ERROR, ErrorType.UNKNOWN -> {
+                // These might need AI analysis, but try some common fixes
+                if (hasPackageJson && commandLower.contains("test")) {
+                    when {
+                        hasPnpm -> fallbacks.add(FallbackPlan("pnpm install && pnpm test", "Reinstall and test", false))
+                        hasYarn -> fallbacks.add(FallbackPlan("yarn install && yarn test", "Reinstall and test", false))
+                        else -> fallbacks.add(FallbackPlan("npm install && npm test", "Reinstall and test", false))
+                    }
+                }
+            }
+        }
+        
+        return fallbacks
+    }
+    
+    /**
+     * Analyze command failure and generate fallback plans
+     * Uses hardcoded fallbacks first, then AI as last resort
      */
     private suspend fun analyzeCommandFailure(
         command: String,
@@ -4067,6 +4859,27 @@ exports.$functionName = (req, res, next) => {
         workspaceRoot: String,
         systemInfo: SystemInfoService.SystemInfo
     ): FailureAnalysis {
+        // Classify error type
+        val errorType = classifyErrorType(output, errorMessage, command)
+        
+        // Try hardcoded fallbacks first (reduces API calls)
+        val hardcodedFallbacks = getHardcodedFallbacks(errorType, command, output, workspaceRoot, systemInfo)
+        
+        if (hardcodedFallbacks.isNotEmpty()) {
+            val reason = when (errorType) {
+                ErrorType.COMMAND_NOT_FOUND -> "Command or tool not found"
+                ErrorType.DEPENDENCY_MISSING -> "Missing dependencies"
+                ErrorType.CODE_ERROR -> "Code error detected (needs debugging)"
+                ErrorType.PERMISSION_ERROR -> "Permission or access issue"
+                ErrorType.CONFIGURATION_ERROR -> "Configuration error"
+                ErrorType.NETWORK_ERROR -> "Network or connection issue"
+                ErrorType.UNKNOWN -> "Unknown error"
+            }
+            android.util.Log.d("GeminiClient", "Using hardcoded fallbacks for $errorType: ${hardcodedFallbacks.size} plans")
+            return FailureAnalysis(reason, hardcodedFallbacks)
+        }
+        
+        // If no hardcoded fallbacks or code error, use AI analysis
         val systemContext = SystemInfoService.generateSystemContext()
         val model = ApiProviderManager.getCurrentModel()
         
