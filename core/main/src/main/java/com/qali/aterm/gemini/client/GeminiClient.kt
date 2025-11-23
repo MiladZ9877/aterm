@@ -1288,33 +1288,68 @@ class GeminiClient(
             val mainPy = workspaceDir.walkTopDown()
                 .firstOrNull { it.isFile && (it.name == "main.py" || it.name == "app.py" || it.name == "__main__.py" || it.name.endsWith("_main.py")) }
             
+            // Check if venv exists
+            val venvExists = File(workspaceDir, "venv").exists() || 
+                           File(workspaceDir, ".venv").exists() ||
+                           File(workspaceDir, "env").exists()
+            
+            // Check for requirements.txt
+            val requirementsFile = File(workspaceDir, "requirements.txt")
+            val hasRequirements = requirementsFile.exists()
+            
             if (mainPy != null) {
-                val pythonCmd = if (systemInfo.os.contains("Alpine")) "python3" else "python3"
-                val runCommand = "$pythonCmd ${mainPy.name}"
+                val pythonCmd = "python3"
+                val runCommand = if (venvExists) {
+                    "source venv/bin/activate && $pythonCmd ${mainPy.name}"
+                } else {
+                    "$pythonCmd ${mainPy.name}"
+                }
+                
+                val fallbacks = mutableListOf<String>()
+                
+                // Add venv creation if needed
+                if (!venvExists && hasRequirements) {
+                    fallbacks.add("python3 -m venv venv || python3 -m virtualenv venv || true")
+                }
+                
+                // Add dependency installation (with venv activation if venv exists)
+                if (hasRequirements) {
+                    if (venvExists) {
+                        fallbacks.add("source venv/bin/activate && pip install -r requirements.txt || pip3 install -r requirements.txt")
+                    } else {
+                        fallbacks.add("pip3 install -r requirements.txt")
+                    }
+                }
+                
+                // Add Python/pip installation
+                fallbacks.add("${systemInfo.packageManagerCommands["install"]} python3 python3-pip")
+                fallbacks.add("${systemInfo.packageManagerCommands["update"]} && ${systemInfo.packageManagerCommands["install"]} python3 python3-pip")
                 
                 commands.add(CommandWithFallbacks(
                     primaryCommand = runCommand,
                     description = "Run Python application",
-                    fallbacks = listOf(
-                        "pip3 install -r requirements.txt",
-                        "${systemInfo.packageManagerCommands["install"]} python3 python3-pip",
-                        "${systemInfo.packageManagerCommands["update"]} && ${systemInfo.packageManagerCommands["install"]} python3 python3-pip"
-                    ),
+                    fallbacks = fallbacks,
                     checkCommand = "python3 --version",
                     installCheck = "pip3 --version"
                 ))
             }
             
-            // Check for requirements.txt
-            val requirementsFile = File(workspaceDir, "requirements.txt")
-            if (requirementsFile.exists()) {
+            // Check for requirements.txt - install dependencies
+            if (hasRequirements) {
+                val installCommand = if (venvExists) {
+                    "source venv/bin/activate && pip install -r requirements.txt"
+                } else {
+                    "pip3 install -r requirements.txt"
+                }
+                
                 commands.add(CommandWithFallbacks(
-                    primaryCommand = "pip3 install -r requirements.txt",
+                    primaryCommand = installCommand,
                     description = "Install Python dependencies",
                     fallbacks = listOf(
+                        if (!venvExists) "python3 -m venv venv || python3 -m virtualenv venv || true" else "",
                         "${systemInfo.packageManagerCommands["install"]} python3-pip",
                         "${systemInfo.packageManagerCommands["update"]} && ${systemInfo.packageManagerCommands["install"]} python3 python3-pip"
-                    ),
+                    ).filter { it.isNotEmpty() },
                     checkCommand = "pip3 --version",
                     installCheck = "python3 --version"
                 ))
