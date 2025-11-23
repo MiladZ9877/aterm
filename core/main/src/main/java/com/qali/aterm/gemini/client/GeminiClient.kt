@@ -1158,6 +1158,7 @@ class GeminiClient(
         // 2. Workspace has existing files (project exists)
         // 3. No strong create keywords (not creating new project)
         // 4. May have debug keywords (fixing tests is okay)
+        // 5. NOT just a simple command execution (like "npm start", "init-db", etc.)
         if (testScore > 0 && hasExistingFiles && 
             (testScore >= createScore || (testScore > 0 && createScore == 0))) {
             // Additional check: if message is primarily about testing
@@ -1166,9 +1167,17 @@ class GeminiClient(
                                      messageLower.contains("pytest") || 
                                      messageLower.contains("jest") ||
                                      messageLower.contains("test api") ||
-                                     messageLower.contains("test endpoint")
+                                     messageLower.contains("test endpoint") ||
+                                     messageLower.contains("run test") ||
+                                     messageLower.contains("run tests")
             
-            if (isPrimarilyTest || mentionsTestCommand) {
+            // Exclude simple command execution (not tests)
+            val isSimpleCommand = messageLower.matches(Regex(".*@\\d+\\.\\d+.*")) || // versioned commands like "app@1.0.0 init-db"
+                                 messageLower.contains("init") && !messageLower.contains("test") ||
+                                 (messageLower.contains("start") || messageLower.contains("run")) && 
+                                 !messageLower.contains("test") && testScore <= 1
+            
+            if ((isPrimarilyTest || mentionsTestCommand) && !isSimpleCommand) {
                 return IntentType.TEST_ONLY
             }
         }
@@ -4042,8 +4051,48 @@ exports.$functionName = (req, res, next) => {
                     } else {
                         emit(GeminiStreamEvent.Chunk("⚠️ Could not generate fixes\n"))
                         onChunk("⚠️ Could not generate fixes\n")
+                        
+                        // If we can't generate fixes, mark phase as completed and exit
+                        updatedTodos = currentTodos.map { todo ->
+                            when {
+                                todo.description == "Phase 4: Fix issues" -> todo.copy(status = TodoStatus.COMPLETED)
+                                todo.description == "Phase 5: Re-run tests to verify" -> todo.copy(status = TodoStatus.COMPLETED)
+                                else -> todo
+                            }
+                        }
+                        updateTodos(updatedTodos)
+                        
+                        emit(GeminiStreamEvent.Chunk("\n⚠️ Could not generate fixes. Some issues may remain.\n"))
+                        onChunk("\n⚠️ Could not generate fixes. Some issues may remain.\n")
+                    }
+                } else {
+                    // Fix generation failed
+                    emit(GeminiStreamEvent.Chunk("⚠️ Failed to generate fixes\n"))
+                    onChunk("⚠️ Failed to generate fixes\n")
+                    
+                    updatedTodos = currentTodos.map { todo ->
+                        when {
+                            todo.description == "Phase 4: Fix issues" -> todo.copy(status = TodoStatus.COMPLETED)
+                            todo.description == "Phase 5: Re-run tests to verify" -> todo.copy(status = TodoStatus.COMPLETED)
+                            else -> todo
+                        }
+                    }
+                    updateTodos(updatedTodos)
+                }
+            } else {
+                // No failures to fix
+                emit(GeminiStreamEvent.Chunk("\n✅ All tests passed! No fixes needed.\n"))
+                onChunk("\n✅ All tests passed! No fixes needed.\n")
+                
+                updatedTodos = currentTodos.map { todo ->
+                    when {
+                        todo.description == "Phase 3: Analyze test failures" -> todo.copy(status = TodoStatus.COMPLETED)
+                        todo.description == "Phase 4: Fix issues" -> todo.copy(status = TodoStatus.COMPLETED)
+                        todo.description == "Phase 5: Re-run tests to verify" -> todo.copy(status = TodoStatus.COMPLETED)
+                        else -> todo
                     }
                 }
+                updateTodos(updatedTodos)
             }
         }
         
@@ -5535,15 +5584,13 @@ exports.$functionName = (req, res, next) => {
         val isWebFramework = detectWebFramework(workspaceRoot)
         val isKotlinJava = detectKotlinJava(workspaceRoot)
         var apiTestResult = true
+        val messageLower = userMessage.lowercase()
+        val wantsApiTest = messageLower.contains("api") || 
+                          messageLower.contains("endpoint") || 
+                          messageLower.contains("test api") ||
+                          messageLower.contains("test endpoint")
         
         if (isWebFramework && !isKotlinJava) {
-            // Check if user specifically wants API testing
-            val messageLower = userMessage.lowercase()
-            val wantsApiTest = messageLower.contains("api") || 
-                              messageLower.contains("endpoint") || 
-                              messageLower.contains("test api") ||
-                              messageLower.contains("test endpoint")
-            
             if (wantsApiTest || testCommands.isEmpty()) {
                 apiTestResult = testAPIs(workspaceRoot, systemInfo, userMessage, ::emitEvent, onChunk, onToolCall, onToolResult)
                 if (!apiTestResult) {
@@ -5566,11 +5613,35 @@ exports.$functionName = (req, res, next) => {
         updatedTodos = currentTodos.map { todo ->
             when {
                 todo.description == "Phase 2: Run API tests (if applicable)" -> todo.copy(status = TodoStatus.COMPLETED)
-                todo.description == "Phase 3: Analyze test failures" -> todo.copy(status = TodoStatus.IN_PROGRESS)
+                todo.description == "Phase 3: Analyze test failures" -> if (hasTestFailures || !apiTestResult) todo.copy(status = TodoStatus.IN_PROGRESS) else todo.copy(status = TodoStatus.COMPLETED)
                 else -> todo
             }
         }
         updateTodos(updatedTodos)
+        
+        // Early exit if no test commands detected and no API tests needed
+        val needsApiTest = isWebFramework && !isKotlinJava && (wantsApiTest || testCommands.isEmpty())
+        if (testCommands.isEmpty() && !needsApiTest) {
+            emit(GeminiStreamEvent.Chunk("\n✅ No tests to run. Task complete.\n"))
+            onChunk("\n✅ No tests to run. Task complete.\n")
+            
+            updatedTodos = currentTodos.map { todo ->
+                when {
+                    todo.description == "Phase 1: Detect and run test commands" -> todo.copy(status = TodoStatus.COMPLETED)
+                    todo.description == "Phase 2: Run API tests (if applicable)" -> todo.copy(status = TodoStatus.COMPLETED)
+                    todo.description == "Phase 3: Analyze test failures" -> todo.copy(status = TodoStatus.COMPLETED)
+                    todo.description == "Phase 4: Fix issues" -> todo.copy(status = TodoStatus.COMPLETED)
+                    todo.description == "Phase 5: Re-run tests to verify" -> todo.copy(status = TodoStatus.COMPLETED)
+                    else -> todo
+                }
+            }
+            updateTodos(updatedTodos)
+            
+            emit(GeminiStreamEvent.Chunk("\n✨ Test flow complete!\n"))
+            onChunk("\n✨ Test flow complete!\n")
+            emit(GeminiStreamEvent.Done)
+            return@flow
+        }
         
         // Phase 3: Analyze test failures
         if (hasTestFailures || !apiTestResult) {
@@ -5672,11 +5743,18 @@ exports.$functionName = (req, res, next) => {
                 })
             }
             
-            val fixText = makeApiCallWithRetryAndCorrection(
-                model, fixRequest, "fixes", signal, null, ::emitEvent, onChunk
-            )
+            val fixText = try {
+                makeApiCallWithRetryAndCorrection(
+                    model, fixRequest, "fixes", signal, null, ::emitEvent, onChunk
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("GeminiClient", "Failed to generate fixes: ${e.message}", e)
+                emit(GeminiStreamEvent.Chunk("⚠️ Error generating fixes: ${e.message}\n"))
+                onChunk("⚠️ Error generating fixes: ${e.message}\n")
+                null
+            }
             
-            if (fixText != null) {
+            if (fixText != null && fixText.isNotBlank()) {
                 // Parse fixes (similar to reverse flow)
                 val fixesJson = try {
                     val jsonStart = fixText.indexOf('[')
@@ -5843,12 +5921,24 @@ exports.$functionName = (req, res, next) => {
                 }
             }
         } else {
+            // No failures detected - all tests passed
             emit(GeminiStreamEvent.Chunk("\n✅ All tests passed! No fixes needed.\n"))
             onChunk("\n✅ All tests passed! No fixes needed.\n")
+            
+            updatedTodos = currentTodos.map { todo ->
+                when {
+                    todo.description == "Phase 3: Analyze test failures" -> todo.copy(status = TodoStatus.COMPLETED)
+                    todo.description == "Phase 4: Fix issues" -> todo.copy(status = TodoStatus.COMPLETED)
+                    todo.description == "Phase 5: Re-run tests to verify" -> todo.copy(status = TodoStatus.COMPLETED)
+                    else -> todo
+                }
+            }
+            updateTodos(updatedTodos)
         }
         
+        // Final todo update
         updatedTodos = currentTodos.map { todo ->
-            if (todo.description == "Phase 5: Re-run tests to verify") {
+            if (todo.description == "Phase 5: Re-run tests to verify" && todo.status != TodoStatus.COMPLETED) {
                 todo.copy(status = TodoStatus.COMPLETED)
             } else {
                 todo
