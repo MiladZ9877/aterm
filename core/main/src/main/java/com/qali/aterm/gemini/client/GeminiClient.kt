@@ -2624,8 +2624,9 @@ exports.$functionName = (req, res, next) => {
         onToolCall: (FunctionCall) -> Unit,
         onToolResult: (String, Map<String, Any>) -> Unit
     ): Boolean {
-        emit(GeminiStreamEvent.Chunk("▶️ Running: ${command.primaryCommand}\n"))
-        onChunk("▶️ Running: ${command.primaryCommand}\n")
+        val runningMsg = "▶️ Running: ${command.primaryCommand}\n"
+        emit(GeminiStreamEvent.Chunk(runningMsg))
+        onChunk(runningMsg)
         
         // Check if command/tool is available
         if (command.checkCommand != null) {
@@ -2646,13 +2647,15 @@ exports.$functionName = (req, res, next) => {
                 
                 if (checkResult.error != null) {
                     // Tool not available, try fallbacks in order
-                    emit(GeminiStreamEvent.Chunk("⚠️ Tool not found, trying fallbacks...\n"))
-                    onChunk("⚠️ Tool not found, trying fallbacks...\n")
+                    val fallbackMsg = "⚠️ Tool not found, trying fallbacks...\n"
+                    emit(GeminiStreamEvent.Chunk(fallbackMsg))
+                    onChunk(fallbackMsg)
                     
                     var fallbackSuccess = false
                     for ((index, fallback) in command.fallbacks.withIndex()) {
-                        emit(GeminiStreamEvent.Chunk("📦 Fallback ${index + 1}/${command.fallbacks.size}: $fallback\n"))
-                        onChunk("📦 Fallback ${index + 1}/${command.fallbacks.size}: $fallback\n")
+                        val fallbackStepMsg = "📦 Fallback ${index + 1}/${command.fallbacks.size}: $fallback\n"
+                        emit(GeminiStreamEvent.Chunk(fallbackStepMsg))
+                        onChunk(fallbackStepMsg)
                         
                         val fallbackCall = FunctionCall(
                             name = "shell",
@@ -2708,8 +2711,9 @@ exports.$functionName = (req, res, next) => {
                     }
                     
                     if (!fallbackSuccess && command.fallbacks.isNotEmpty()) {
-                        emit(GeminiStreamEvent.Chunk("⚠️ All fallbacks failed, but continuing with primary command...\n"))
-                        onChunk("⚠️ All fallbacks failed, but continuing with primary command...\n")
+                        val allFailedMsg = "⚠️ All fallbacks failed, but continuing with primary command...\n"
+                        emit(GeminiStreamEvent.Chunk(allFailedMsg))
+                        onChunk(allFailedMsg)
                     }
                 }
             } catch (e: Exception) {
@@ -2744,16 +2748,18 @@ exports.$functionName = (req, res, next) => {
             onToolResult("shell", primaryCall.args)
             
             if (result.error == null) {
-                emit(GeminiStreamEvent.Chunk("✅ Command executed successfully\n"))
-                onChunk("✅ Command executed successfully\n")
+                val successMsg = "✅ Command executed successfully\n"
+                emit(GeminiStreamEvent.Chunk(successMsg))
+                onChunk(successMsg)
                 return true
             } else {
                 // If command failed, try with venv activation if it's Python
                 if (command.primaryCommand.contains("python") && 
                     !primaryCommand.contains("venv") &&
                     File(workspaceRoot, "venv").exists()) {
-                    emit(GeminiStreamEvent.Chunk("⚠️ Command failed, trying with venv activation...\n"))
-                    onChunk("⚠️ Command failed, trying with venv activation...\n")
+                    val venvMsg = "⚠️ Command failed, trying with venv activation...\n"
+                    emit(GeminiStreamEvent.Chunk(venvMsg))
+                    onChunk(venvMsg)
                     
                     val venvCommand = "source venv/bin/activate && ${command.primaryCommand}"
                     val venvCall = FunctionCall(
@@ -2831,8 +2837,9 @@ exports.$functionName = (req, res, next) => {
             val commandsNeeded = detectCommandsNeeded(workspaceRoot, systemInfo, userMessage, ::emit, onChunk)
             
             if (commandsNeeded.isNotEmpty()) {
-                emit(GeminiStreamEvent.Chunk("📋 Found ${commandsNeeded.size} command(s) to execute\n"))
-                onChunk("📋 Found ${commandsNeeded.size} command(s) to execute\n")
+                val message = "📋 Found ${commandsNeeded.size} command(s) to execute\n"
+                emit(GeminiStreamEvent.Chunk(message))
+                onChunk(message)
                 
                 for (command in commandsNeeded) {
                     executeCommandWithFallbacks(command, workspaceRoot, systemInfo, ::emit, onChunk, onToolCall, onToolResult)
@@ -3005,13 +3012,28 @@ exports.$functionName = (req, res, next) => {
             - classes: List of all class names in this file (empty array if none)
             - functions: List of all function/method names in this file (empty array if none)
             - imports: List of all imports/dependencies (use relative paths or file names)
-            - exports: List of what this file exports (classes, functions, constants, etc.)
+            - exports: List of what this file exports (classes, functions, constants, etc.) - be SPECIFIC with exact names
             - metadata_tags: Unique tags for categorization (e.g., "db", "auth", "api", "ui", "config", "test")
-            - relationships: List of other files this file depends on (use file_path values)
+            - relationships: List of other files this file depends on (use file_path values) - be COMPLETE and ACCURATE
             - dependencies: List of external dependencies/packages needed
             - description: Detailed description of the file's purpose and role
             - expectations: What this file should accomplish and how it fits in the project
             - file_type: Type of file (e.g., "javascript", "typescript", "python", "html", "css", "json", "config")
+            
+            **CRITICAL FOR CODE COHERENCE:**
+            - For imports: Specify the EXACT import paths and what is imported (e.g., "import { ClassName } from './other-file.js'")
+            - For exports: Specify the EXACT export names and types (e.g., "export class MyClass", "export function myFunction")
+            - For relationships: Include ALL files that this file imports from, depends on, or references
+            - For functions: Include function signatures with parameter names and types (if applicable)
+            - For classes: Include class names and any interfaces/classes they implement or extend
+            - Ensure all relationships are bidirectional - if File A imports from File B, File B should be in File A's relationships
+            
+            **IMPORT/EXPORT COHERENCE REQUIREMENTS:**
+            - If File A imports something from File B, File B MUST export that exact item
+            - Import paths must match file paths exactly (respecting relative paths)
+            - Export names must match import names exactly
+            - Function/class signatures must be consistent across files
+            - All circular dependencies should be identified and handled appropriately
             
             For HTML files, also include:
             - links: CSS files, JS files, images, etc. referenced
@@ -3024,6 +3046,13 @@ exports.$functionName = (req, res, next) => {
             - variables: CSS variables defined
             
             Format your response as a JSON array of file metadata objects.
+            
+            **VERIFICATION:**
+            After generating metadata, verify:
+            1. All import/export relationships are consistent (if A imports X from B, B exports X)
+            2. All file paths in relationships match actual file_path values
+            3. All function/class names are consistent across related files
+            4. All dependencies are properly identified
             
             User's original request: $userMessage
         """.trimIndent()
@@ -3145,27 +3174,64 @@ exports.$functionName = (req, res, next) => {
             val expectations = fileMeta.optString("expectations", "")
             val fileType = fileMeta.optString("file_type", "")
             
-            // Build context from already-generated related files
+            // Build context from already-generated related files with enhanced coherence information
             val relatedFilesContext = buildString {
                 relationships.forEach { relatedPath ->
                     generatedFiles[relatedPath]?.let { content ->
                         append("\n\n=== Related file: $relatedPath ===\n")
-                        // Include first 500 chars and key exports/classes
-                        val preview = content.take(500)
+                        
+                        // Extract key information for coherence
+                        val lines = content.lines()
+                        val exports = mutableListOf<String>()
+                        val imports = mutableListOf<String>()
+                        val classes = mutableListOf<String>()
+                        val functions = mutableListOf<String>()
+                        
+                        // Extract exports, imports, classes, and functions for better coherence
+                        lines.forEach { line ->
+                            val trimmed = line.trim()
+                            when {
+                                trimmed.startsWith("export ") -> exports.add(trimmed.take(150))
+                                trimmed.startsWith("import ") || trimmed.startsWith("from ") -> imports.add(trimmed.take(150))
+                                trimmed.matches(Regex("^(export\\s+)?(class|interface|type|enum)\\s+\\w+")) -> classes.add(trimmed.take(150))
+                                trimmed.matches(Regex("^(export\\s+)?(function|const|let|var)\\s+\\w+")) -> functions.add(trimmed.take(150))
+                            }
+                        }
+                        
+                        // Include key coherence information first
+                        if (exports.isNotEmpty()) {
+                            append("Exports: ${exports.take(5).joinToString(", ")}\n")
+                        }
+                        if (imports.isNotEmpty()) {
+                            append("Imports: ${imports.take(5).joinToString(", ")}\n")
+                        }
+                        if (classes.isNotEmpty()) {
+                            append("Classes: ${classes.take(5).joinToString(", ")}\n")
+                        }
+                        if (functions.isNotEmpty()) {
+                            append("Functions: ${functions.take(5).joinToString(", ")}\n")
+                        }
+                        
+                        append("\n--- Code Preview ---\n")
+                        // Include first 600 chars for better context
+                        val preview = content.take(600)
                         append(preview)
-                        if (content.length > 500) append("\n... (truncated)")
+                        if (content.length > 600) append("\n... (truncated)")
                     }
                 }
             }
             
-            // Build context from all previously generated files (for consistency)
+            // Build context from all previously generated files (for consistency) - limit to most relevant
             val allFilesContext = if (generatedFiles.isNotEmpty()) {
                 buildString {
                     append("\n\n=== Previously Generated Files (for reference and consistency) ===\n")
-                    generatedFiles.forEach { (path, content) ->
+                    // Only include last 3-5 files to reduce token usage and speed up generation
+                    val recentFiles = generatedFiles.toList().takeLast(5)
+                    recentFiles.forEach { (path, content) ->
                         append("\n--- $path ---\n")
-                        append(content.take(300))
-                        if (content.length > 300) append("\n...")
+                        // Reduce preview size to 200 chars for speed
+                        append(content.take(200))
+                        if (content.length > 200) append("\n...")
                     }
                 }
             } else ""
@@ -3183,9 +3249,21 @@ exports.$functionName = (req, res, next) => {
                 - Do NOT use placeholders or TODOs unless explicitly needed
                 - Ensure all imports are correct and match the metadata
                 - Follow the file type conventions: $fileType
-                - Ensure consistency with already-generated files (see context below)
                 - Make sure imports reference actual files that exist or will exist
                 - Ensure function/class names match exactly with what other files expect
+                
+                **CODE COHERENCE REQUIREMENTS (CRITICAL FOR WORKING CODE):**
+                - MATCH PATTERNS: Study the related files and previously generated files below. Match their coding style, patterns, and conventions exactly
+                - IMPORT CONSISTENCY: All imports must match the exact paths, names, and export patterns used in related files
+                - EXPORT CONSISTENCY: All exports must match exactly what other files are importing (same names, same signatures)
+                - API CONSISTENCY: If this file calls functions/classes from related files, use the EXACT same function names, parameter names, and signatures as shown in those files
+                - NAMING CONSISTENCY: Use the same naming conventions (camelCase, PascalCase, snake_case, etc.) as related files
+                - STRUCTURE CONSISTENCY: Follow the same code organization patterns (imports order, class structure, function placement) as related files
+                - TYPE CONSISTENCY: If using TypeScript or typed languages, ensure types match exactly with related files
+                - INTERFACE CONSISTENCY: If implementing interfaces or extending classes from related files, match their exact structure
+                - ERROR HANDLING: Use the same error handling patterns as related files
+                - LOGGING/DEBUGGING: Use the same logging/debugging patterns as related files
+                - CONFIGURATION: Use the same configuration patterns and constants as related files
                 
                 **COMPLETENESS REQUIREMENTS (CRITICAL):**
                 - For games/applications: Include ALL initialization code (DOMContentLoaded, window.onload, etc.)
@@ -3197,6 +3275,8 @@ exports.$functionName = (req, res, next) => {
                 - For Python apps: Include ALL main execution blocks and function calls
                 - NO MISSING PIECES: Every function must be complete, every event must be bound, every feature must work
                 - The code MUST be immediately runnable and functional - no setup steps missing
+                - ALL dependencies must be properly imported and used correctly
+                - ALL exported items must be fully implemented and match what other files expect
                 
                 **File Metadata:**
                 - Description: $description
@@ -3214,6 +3294,16 @@ exports.$functionName = (req, res, next) => {
                 $relatedFilesContext
                 $allFilesContext
                 
+                **COHERENCE VERIFICATION CHECKLIST:**
+                Before generating, verify:
+                1. All import paths match exactly with file paths in the project
+                2. All imported names match exactly with exports from related files
+                3. All function/class signatures match what related files expect
+                4. All naming conventions match related files
+                5. All code patterns and structures match related files
+                6. All types/interfaces match related files (if applicable)
+                7. The code will work seamlessly with related files without conflicts
+                
                 **EXAMPLES OF WHAT MUST BE INCLUDED:**
                 - If it's a game: game initialization, event listeners for moves/clicks, win/lose detection, UI updates
                 - If it's a web app: DOM ready handlers, all button/input event bindings, all API calls
@@ -3222,6 +3312,7 @@ exports.$functionName = (req, res, next) => {
                 
                 Generate the complete, fully functional code now. Return ONLY the code, no explanations or markdown formatting.
                 The code MUST be immediately runnable and work end-to-end without missing pieces.
+                The code MUST be coherent with all related files and work as a unified system.
             """.trimIndent()
             
             // Make code generation request
@@ -3250,7 +3341,9 @@ exports.$functionName = (req, res, next) => {
             )
             
             if (codeContent == null) {
-                emit(GeminiStreamEvent.Chunk("⚠️ Failed to generate: $filePath\n"))
+                val failedMsg = "⚠️ Failed to generate: $filePath\n"
+                emit(GeminiStreamEvent.Chunk(failedMsg))
+                onChunk(failedMsg)
                 continue
             }
             
@@ -3261,8 +3354,9 @@ exports.$functionName = (req, res, next) => {
                 .trim()
             
             // Write file immediately instead of storing in memory
-            emit(GeminiStreamEvent.Chunk("📝 Writing: $filePath\n"))
-            onChunk("📝 Writing: $filePath\n")
+            val writingMsg = "📝 Writing: $filePath\n"
+            emit(GeminiStreamEvent.Chunk(writingMsg))
+            onChunk(writingMsg)
             
             val functionCall = FunctionCall(
                 name = "write_file",
@@ -3316,8 +3410,9 @@ exports.$functionName = (req, res, next) => {
                                 android.util.Log.w("GeminiClient", "Failed to auto-fix: ${e.message}")
                             }
                         } else {
-                            emit(GeminiStreamEvent.Chunk("✅ No issues found in $filePath\n"))
-                            onChunk("✅ No issues found in $filePath\n")
+                            val noIssuesMsg = "✅ No issues found in $filePath\n"
+                            emit(GeminiStreamEvent.Chunk(noIssuesMsg))
+                            onChunk(noIssuesMsg)
                         }
                     } catch (e: Exception) {
                         android.util.Log.w("GeminiClient", "Linter check failed: ${e.message}")
@@ -3352,8 +3447,9 @@ exports.$functionName = (req, res, next) => {
                 generatedFiles[filePath] = cleanCode
             }
             
-            emit(GeminiStreamEvent.Chunk("✅ Generated and written: $filePath\n"))
-            onChunk("✅ Generated and written: $filePath\n")
+            val generatedMsg = "✅ Generated and written: $filePath\n"
+            emit(GeminiStreamEvent.Chunk(generatedMsg))
+            onChunk(generatedMsg)
         }
         
         // Mark Phase 3 as completed (no withContext - emit must be in same context)
@@ -3367,14 +3463,16 @@ exports.$functionName = (req, res, next) => {
         updateTodos(updatedTodos)
         
         // Phase 4: Detect and execute commands needed after file creation
-        emit(GeminiStreamEvent.Chunk("\n🔍 Phase 4: Detecting commands to run...\n"))
-        onChunk("\n🔍 Phase 4: Detecting commands to run...\n")
+        val phase4Msg = "\n🔍 Phase 4: Detecting commands to run...\n"
+        emit(GeminiStreamEvent.Chunk(phase4Msg))
+        onChunk(phase4Msg)
         
         val commandsNeeded = detectCommandsNeeded(workspaceRoot, systemInfo, userMessage, ::emit, onChunk)
         
         if (commandsNeeded.isNotEmpty()) {
-            emit(GeminiStreamEvent.Chunk("📋 Found ${commandsNeeded.size} command(s) to execute\n"))
-            onChunk("📋 Found ${commandsNeeded.size} command(s) to execute\n")
+            val foundCmdsMsg = "📋 Found ${commandsNeeded.size} command(s) to execute\n"
+            emit(GeminiStreamEvent.Chunk(foundCmdsMsg))
+            onChunk(foundCmdsMsg)
             
             // Add command execution to todos
             val todosWithCommands = updatedTodos + commandsNeeded.mapIndexed { index, cmd ->
@@ -3863,22 +3961,49 @@ exports.$functionName = (req, res, next) => {
             
             Provide fixes for all identified issues. For each fix, provide:
             1. The file path
-            2. The exact old_string to replace (include enough context)
+            2. The exact old_string to replace (include enough context - at least 5-10 lines before and after)
             3. The exact new_string (complete fixed code)
             4. Confidence level (high/medium/low)
+            
+            **CRITICAL CODE COHERENCE REQUIREMENTS FOR FIXES:**
+            - MAINTAIN CONSISTENCY: All fixes must maintain consistency with the existing codebase patterns, style, and conventions
+            - PRESERVE IMPORTS: Ensure all imports remain correct and match what the fixed code uses
+            - PRESERVE EXPORTS: Ensure all exports remain consistent with what other files expect
+            - MATCH SIGNATURES: If fixing function/class signatures, ensure they match what other files call/import
+            - MATCH PATTERNS: Use the same coding patterns, error handling, and structure as the rest of the codebase
+            - PRESERVE INTERFACES: If fixing classes/interfaces, ensure they maintain compatibility with existing code
+            - VERIFY DEPENDENCIES: Ensure fixes don't break dependencies or require changes in other files (unless explicitly needed)
+            - MAINTAIN TYPES: If using TypeScript or typed languages, ensure types remain consistent
+            - PRESERVE API: If fixing public APIs, ensure backward compatibility or update all callers consistently
+            
+            **FIX QUALITY REQUIREMENTS:**
+            - Each fix must be complete and functional - no partial fixes
+            - Each fix must include sufficient context (old_string) to uniquely identify the location
+            - Each fix must be self-contained and not break other parts of the code
+            - If a fix requires changes in multiple files, provide all necessary fixes
+            - All fixes must work together as a cohesive system
             
             Format as JSON array:
             [
               {
                 "file_path": "path/to/file.ext",
-                "old_string": "exact code to replace with context",
+                "old_string": "exact code to replace with context (include 5-10 lines before and after for uniqueness)",
                 "new_string": "complete fixed code",
                 "confidence": "high|medium|low",
-                "description": "What this fix does"
+                "description": "What this fix does and why it maintains code coherence"
               }
             ]
             
-            Be thorough and ensure all fixes are complete and correct.
+            **VERIFICATION CHECKLIST:**
+            Before providing fixes, verify:
+            1. All fixes maintain consistency with existing code patterns
+            2. All imports/exports remain correct and consistent
+            3. All function/class signatures match what other files expect
+            4. All fixes work together without conflicts
+            5. All fixes are complete and functional
+            6. No breaking changes unless explicitly required by the goal
+            
+            Be thorough and ensure all fixes are complete, correct, and maintain code coherence.
         """.trimIndent()
         
         val fixRequest = JSONObject().apply {
