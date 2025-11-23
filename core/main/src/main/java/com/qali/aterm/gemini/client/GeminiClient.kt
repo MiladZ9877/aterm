@@ -4320,6 +4320,7 @@ exports.$functionName = (req, res, next) => {
         )
         
         val model = ApiProviderManager.getCurrentModel()
+        val systemInfo = SystemInfoService.detectSystemInfo()
         val systemContext = SystemInfoService.generateSystemContext()
         
         // Check if task needs documentation search
@@ -5882,22 +5883,22 @@ exports.$functionName = (req, res, next) => {
         
         val systemContext = SystemInfoService.generateSystemContext()
         
-        val installCmd = when (systemInfo.packageManager) {
-            SystemInfoService.PackageManager.APK -> "apk add"
-            SystemInfoService.PackageManager.APT -> "apt-get install -y"
-            SystemInfoService.PackageManager.YUM -> "yum install -y"
-            SystemInfoService.PackageManager.DNF -> "dnf install -y"
-            SystemInfoService.PackageManager.PACMAN -> "pacman -S --noconfirm"
-            else -> "apk add"
+        val installCmd = when (systemInfo.packageManager.lowercase()) {
+            "apk" -> "apk add"
+            "apt", "apt-get" -> "apt-get install -y"
+            "yum" -> "yum install -y"
+            "dnf" -> "dnf install -y"
+            "pacman" -> "pacman -S --noconfirm"
+            else -> systemInfo.packageManagerCommands["install"] ?: "apk add"
         }
         
-        val updateCmd = when (systemInfo.packageManager) {
-            SystemInfoService.PackageManager.APK -> "apk update"
-            SystemInfoService.PackageManager.APT -> "apt-get update"
-            SystemInfoService.PackageManager.YUM -> "yum update -y"
-            SystemInfoService.PackageManager.DNF -> "dnf update -y"
-            SystemInfoService.PackageManager.PACMAN -> "pacman -Sy"
-            else -> "apk update"
+        val updateCmd = when (systemInfo.packageManager.lowercase()) {
+            "apk" -> "apk update"
+            "apt", "apt-get" -> "apt-get update"
+            "yum" -> "yum update -y"
+            "dnf" -> "dnf update -y"
+            "pacman" -> "pacman -Sy"
+            else -> systemInfo.packageManagerCommands["update"] ?: "apk update"
         }
         
         val testDetectionPrompt = """
