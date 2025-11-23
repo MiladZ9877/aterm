@@ -4132,14 +4132,18 @@ exports.$functionName = (req, res, next) => {
                 "Unable to analyze failure (no API key)",
                 emptyList()
             )
-            val response = makeApiCallSimple(
-                apiKey,
-                model,
-                request,
-                useLongTimeout = false
-            )
             
-            if (response != null) {
+            // Wrap network call in IO dispatcher to avoid NetworkOnMainThreadException
+            val response = withContext(Dispatchers.IO) {
+                makeApiCallSimple(
+                    apiKey,
+                    model,
+                    request,
+                    useLongTimeout = false
+                )
+            }
+            
+            if (response != null && response.isNotEmpty()) {
                 val jsonStart = response.indexOf('{')
                 val jsonEnd = response.lastIndexOf('}') + 1
                 if (jsonStart >= 0 && jsonEnd > jsonStart) {
@@ -7866,14 +7870,18 @@ exports.$functionName = (req, res, next) => {
         
         return try {
             val apiKey = ApiProviderManager.getNextApiKey() ?: return emptyList()
-            val response = makeApiCallSimple(
-                apiKey,
-                model,
-                request,
-                useLongTimeout = false
-            )
             
-            if (response != null) {
+            // Wrap network call in IO dispatcher to avoid NetworkOnMainThreadException
+            val response = withContext(Dispatchers.IO) {
+                makeApiCallSimple(
+                    apiKey,
+                    model,
+                    request,
+                    useLongTimeout = false
+                )
+            }
+            
+            if (response != null && response.isNotEmpty()) {
                 val jsonStart = response.indexOf('[')
                 val jsonEnd = response.lastIndexOf(']') + 1
                 if (jsonStart >= 0 && jsonEnd > jsonStart) {
