@@ -319,38 +319,67 @@ class GeminiClient(
         onToolResult: (String, Map<String, Any>) -> Unit,
         toolCallsToExecute: MutableList<Triple<FunctionCall, ToolResult, String>>
     ): String? {
-        // Determine API endpoint based on provider type
+        // Determine API endpoint and convert request based on provider type
         val providerType = ApiProviderManager.selectedProvider
-        val url = when (providerType) {
+        val (url, convertedRequestBody, headers) = when (providerType) {
             ApiProviderType.GOOGLE -> {
                 // Google Gemini API endpoint - using SSE (Server-Sent Events) for streaming
-                "https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?key=$apiKey"
+                val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?key=$apiKey"
+                Triple(url, requestBody, emptyMap<String, String>())
+            }
+            ApiProviderType.OPENAI -> {
+                // OpenAI API endpoint
+                val url = "https://api.openai.com/v1/chat/completions"
+                val headers = mapOf("Authorization" to "Bearer $apiKey")
+                val convertedBody = convertRequestToOpenAI(requestBody, model)
+                Triple(url, convertedBody, headers)
+            }
+            ApiProviderType.ANTHROPIC -> {
+                // Anthropic Claude API endpoint
+                val url = "https://api.anthropic.com/v1/messages"
+                val headers = mapOf(
+                    "x-api-key" to apiKey,
+                    "anthropic-version" to "2023-06-01"
+                )
+                val convertedBody = convertRequestToAnthropic(requestBody, model)
+                Triple(url, convertedBody, headers)
             }
             ApiProviderType.CUSTOM -> {
-                // Custom provider - check if it's Ollama (typically runs on localhost:11434)
-                // For Ollama, use /api/generate or /api/chat endpoint
-                if (apiKey.contains("localhost") || apiKey.contains("127.0.0.1") || apiKey.contains("ollama")) {
+                // Custom provider - check if it's Ollama
+                if (apiKey.contains("localhost") || apiKey.contains("127.0.0.1") || apiKey.contains("ollama") || apiKey.contains(":11434")) {
                     // Ollama format: http://localhost:11434/api/chat
-                    val baseUrl = if (apiKey.startsWith("http")) apiKey else "http://$apiKey"
-                    "$baseUrl/api/chat"
+                    val baseUrl = when {
+                        apiKey.startsWith("http") -> apiKey.split("/api").first()
+                        apiKey.contains(":11434") -> "http://$apiKey"
+                        else -> "http://localhost:11434"
+                    }
+                    val url = "$baseUrl/api/chat"
+                    val convertedBody = convertRequestToOllama(requestBody, model)
+                    Triple(url, convertedBody, emptyMap<String, String>())
                 } else {
-                    // Generic custom API - assume it's a full URL
-                    apiKey
+                    // Generic custom API - assume it's a full URL and Gemini-compatible format
+                    Triple(apiKey, requestBody, emptyMap<String, String>())
                 }
             }
             else -> {
-                // For other providers (OpenAI, Anthropic, etc.), use Gemini-compatible endpoint for now
-                // TODO: Add proper support for other providers
-                "https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?key=$apiKey"
+                // For other providers, use Gemini-compatible endpoint for now
+                val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?key=$apiKey"
+                Triple(url, requestBody, emptyMap<String, String>())
             }
         }
-        android.util.Log.d("GeminiClient", "makeApiCall: URL: ${url.replace(apiKey, "***")}")
+        android.util.Log.d("GeminiClient", "makeApiCall: Provider: $providerType, URL: ${url.replace(apiKey, "***")}")
         android.util.Log.d("GeminiClient", "makeApiCall: Model: $model")
         
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(url)
-            .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
-            .build()
+            .post(convertedRequestBody.toString().toRequestBody("application/json".toMediaType()))
+        
+        // Add headers if any
+        headers.forEach { (key, value) ->
+            requestBuilder.addHeader(key, value)
+        }
+        
+        val request = requestBuilder.build()
         
         android.util.Log.d("GeminiClient", "makeApiCall: Executing request...")
         val startTime = System.currentTimeMillis()
@@ -384,88 +413,65 @@ class GeminiClient(
                     }
                     
                     try {
-                        // Try parsing as JSON array first (non-streaming response)
-                        if (bodyString.trim().startsWith("[")) {
-                            android.util.Log.d("GeminiClient", "makeApiCall: Detected JSON array format (non-streaming)")
-                            val jsonArray = JSONArray(bodyString)
-                            android.util.Log.d("GeminiClient", "makeApiCall: JSON array has ${jsonArray.length()} elements")
-                            
-                            var lastFinishReason: String? = null
-                            var hasContent = false
-                            for (i in 0 until jsonArray.length()) {
-                                val json = jsonArray.getJSONObject(i)
-                                android.util.Log.d("GeminiClient", "makeApiCall: Processing array element $i")
-                                val finishReason = processResponse(json, onChunk, onToolCall, onToolResult, toolCallsToExecute)
-                                if (finishReason != null) {
-                                    lastFinishReason = finishReason
-                                }
-                                // Check if this element has content (text or function calls)
-                                val candidates = json.optJSONArray("candidates")
-                                if (candidates != null && candidates.length() > 0) {
-                                    val candidate = candidates.optJSONObject(0)
-                                    if (candidate != null && candidate.has("content")) {
-                                        hasContent = true
-                                    }
-                                }
-                            }
-                            // If we have content but no finish reason, assume STOP
-                            if (lastFinishReason == null && hasContent) {
-                                android.util.Log.d("GeminiClient", "makeApiCall: No finish reason in array but has content, assuming STOP")
-                                return "STOP"
-                            }
-                            return lastFinishReason
-                        } else {
-                            // Try parsing as SSE (Server-Sent Events) format
-                            android.util.Log.d("GeminiClient", "makeApiCall: Attempting SSE format parsing")
-                            val lines = bodyString.lines()
-                            android.util.Log.d("GeminiClient", "makeApiCall: Total lines in response: ${lines.size}")
-                            
-                            var lineCount = 0
-                            var dataLineCount = 0
-                            
-                            for (line in lines) {
-                                lineCount++
-                                val trimmedLine = line.trim()
-                                
-                                if (trimmedLine.isEmpty()) continue
-                                
-                                if (trimmedLine.startsWith("data: ")) {
-                                    dataLineCount++
-                                    val jsonStr = trimmedLine.substring(6)
-                                    if (jsonStr == "[DONE]" || jsonStr.isEmpty()) {
-                                        android.util.Log.d("GeminiClient", "makeApiCall: Received [DONE] marker")
-                                        continue
-                                    }
+                        // Parse response based on provider type
+                        val finishReason = when (providerType) {
+                            ApiProviderType.GOOGLE -> {
+                                // Try parsing as JSON array first (non-streaming response)
+                                if (bodyString.trim().startsWith("[")) {
+                                    android.util.Log.d("GeminiClient", "makeApiCall: Detected JSON array format (non-streaming)")
+                                    val jsonArray = JSONArray(bodyString)
+                                    android.util.Log.d("GeminiClient", "makeApiCall: JSON array has ${jsonArray.length()} elements")
                                     
-                                    try {
-                                        android.util.Log.d("GeminiClient", "makeApiCall: Parsing SSE data line $dataLineCount")
-                                        val json = JSONObject(jsonStr)
-                                        android.util.Log.d("GeminiClient", "makeApiCall: Processing SSE data line $dataLineCount")
-                                        val finishReason = processResponse(json, onChunk, onToolCall, onToolResult, toolCallsToExecute)
-                                        if (finishReason != null) {
-                                            return finishReason
+                                    var lastFinishReason: String? = null
+                                    var hasContent = false
+                                    for (i in 0 until jsonArray.length()) {
+                                        val json = jsonArray.getJSONObject(i)
+                                        android.util.Log.d("GeminiClient", "makeApiCall: Processing array element $i")
+                                        val fr = processResponse(json, onChunk, onToolCall, onToolResult, toolCallsToExecute, providerType)
+                                        if (fr != null) {
+                                            lastFinishReason = fr
                                         }
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("GeminiClient", "makeApiCall: Failed to parse SSE JSON on line $dataLineCount", e)
-                                        android.util.Log.e("GeminiClient", "makeApiCall: JSON string: ${jsonStr.take(500)}")
+                                        // Check if this element has content (text or function calls)
+                                        val candidates = json.optJSONArray("candidates")
+                                        if (candidates != null && candidates.length() > 0) {
+                                            val candidate = candidates.optJSONObject(0)
+                                            if (candidate != null && candidate.has("content")) {
+                                                hasContent = true
+                                            }
+                                        }
                                     }
-                                } else if (trimmedLine.startsWith(":")) {
-                                    // SSE comment line, skip
-                                    android.util.Log.d("GeminiClient", "makeApiCall: Skipping SSE comment line")
+                                    // If we have content but no finish reason, assume STOP
+                                    if (lastFinishReason == null && hasContent) {
+                                        android.util.Log.d("GeminiClient", "makeApiCall: No finish reason in array but has content, assuming STOP")
+                                        "STOP"
+                                    } else {
+                                        lastFinishReason
+                                    }
                                 } else {
-                                    // Try parsing the whole body as a single JSON object
-                                    try {
-                                        android.util.Log.d("GeminiClient", "makeApiCall: Attempting to parse as single JSON object")
-                                        val json = JSONObject(bodyString)
-                                        android.util.Log.d("GeminiClient", "makeApiCall: Processing single JSON object")
-                                        return processResponse(json, onChunk, onToolCall, onToolResult, toolCallsToExecute)
-                                    } catch (e: Exception) {
-                                        android.util.Log.w("GeminiClient", "makeApiCall: Unexpected line format: ${trimmedLine.take(100)}")
-                                    }
+                                    // Try parsing as SSE (Server-Sent Events) format
+                                    parseGeminiSSEResponse(bodyString, onChunk, onToolCall, onToolResult, toolCallsToExecute)
                                 }
                             }
-                            android.util.Log.d("GeminiClient", "makeApiCall: Finished SSE parsing. Total lines: $lineCount, Data lines: $dataLineCount")
+                            ApiProviderType.OPENAI -> {
+                                parseOpenAIResponse(bodyString, onChunk, onToolCall, onToolResult, toolCallsToExecute)
+                            }
+                            ApiProviderType.ANTHROPIC -> {
+                                parseAnthropicResponse(bodyString, onChunk, onToolCall, onToolResult, toolCallsToExecute)
+                            }
+                            ApiProviderType.CUSTOM -> {
+                                if (apiKey.contains("localhost") || apiKey.contains("127.0.0.1") || apiKey.contains("ollama") || apiKey.contains(":11434")) {
+                                    parseOllamaResponse(bodyString, onChunk, onToolCall, onToolResult, toolCallsToExecute)
+                                } else {
+                                    // Generic custom - try Gemini format
+                                    parseGeminiSSEResponse(bodyString, onChunk, onToolCall, onToolResult, toolCallsToExecute)
+                                }
+                            }
+                            else -> {
+                                // Default to Gemini format
+                                parseGeminiSSEResponse(bodyString, onChunk, onToolCall, onToolResult, toolCallsToExecute)
+                            }
                         }
+                        return finishReason
                     } catch (e: Exception) {
                         android.util.Log.e("GeminiClient", "makeApiCall: Failed to parse response body", e)
                         android.util.Log.e("GeminiClient", "makeApiCall: Response preview: ${bodyString.take(500)}")
@@ -487,12 +493,481 @@ class GeminiClient(
         return null // No finish reason found
     }
     
+    /**
+     * Parse Gemini SSE response format
+     */
+    private fun parseGeminiSSEResponse(
+        bodyString: String,
+        onChunk: (String) -> Unit,
+        onToolCall: (FunctionCall) -> Unit,
+        onToolResult: (String, Map<String, Any>) -> Unit,
+        toolCallsToExecute: MutableList<Triple<FunctionCall, ToolResult, String>>
+    ): String? {
+        // Try parsing as SSE (Server-Sent Events) format
+        android.util.Log.d("GeminiClient", "makeApiCall: Attempting SSE format parsing")
+        val lines = bodyString.lines()
+        android.util.Log.d("GeminiClient", "makeApiCall: Total lines in response: ${lines.size}")
+        
+        var lineCount = 0
+        var dataLineCount = 0
+        
+        for (line in lines) {
+            lineCount++
+            val trimmedLine = line.trim()
+            
+            if (trimmedLine.isEmpty()) continue
+            
+            if (trimmedLine.startsWith("data: ")) {
+                dataLineCount++
+                val jsonStr = trimmedLine.substring(6)
+                if (jsonStr == "[DONE]" || jsonStr.isEmpty()) {
+                    android.util.Log.d("GeminiClient", "makeApiCall: Received [DONE] marker")
+                    continue
+                }
+                
+                try {
+                    android.util.Log.d("GeminiClient", "makeApiCall: Parsing SSE data line $dataLineCount")
+                    val json = JSONObject(jsonStr)
+                    android.util.Log.d("GeminiClient", "makeApiCall: Processing SSE data line $dataLineCount")
+                    val finishReason = processResponse(json, onChunk, onToolCall, onToolResult, toolCallsToExecute, ApiProviderType.GOOGLE)
+                    if (finishReason != null) {
+                        return finishReason
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("GeminiClient", "makeApiCall: Failed to parse SSE JSON on line $dataLineCount", e)
+                    android.util.Log.e("GeminiClient", "makeApiCall: JSON string: ${jsonStr.take(500)}")
+                }
+            } else if (trimmedLine.startsWith(":")) {
+                // SSE comment line, skip
+                android.util.Log.d("GeminiClient", "makeApiCall: Skipping SSE comment line")
+            } else {
+                // Try parsing the whole body as a single JSON object
+                try {
+                    android.util.Log.d("GeminiClient", "makeApiCall: Attempting to parse as single JSON object")
+                    val json = JSONObject(bodyString)
+                    android.util.Log.d("GeminiClient", "makeApiCall: Processing single JSON object")
+                    return processResponse(json, onChunk, onToolCall, onToolResult, toolCallsToExecute, ApiProviderType.GOOGLE)
+                } catch (e: Exception) {
+                    android.util.Log.w("GeminiClient", "makeApiCall: Unexpected line format: ${trimmedLine.take(100)}")
+                }
+            }
+        }
+        android.util.Log.d("GeminiClient", "makeApiCall: Finished SSE parsing. Total lines: $lineCount, Data lines: $dataLineCount")
+        return null
+    }
+    
+    /**
+     * Parse OpenAI response format
+     */
+    private fun parseOpenAIResponse(
+        bodyString: String,
+        onChunk: (String) -> Unit,
+        onToolCall: (FunctionCall) -> Unit,
+        onToolResult: (String, Map<String, Any>) -> Unit,
+        toolCallsToExecute: MutableList<Triple<FunctionCall, ToolResult, String>>
+    ): String? {
+        val json = JSONObject(bodyString)
+        val choices = json.optJSONArray("choices")
+        if (choices != null && choices.length() > 0) {
+            val choice = choices.getJSONObject(0)
+            val message = choice.optJSONObject("message")
+            if (message != null) {
+                val content = message.optString("content", "")
+                if (content.isNotEmpty()) {
+                    onChunk(content)
+                }
+                
+                // Handle tool calls
+                val toolCalls = message.optJSONArray("tool_calls")
+                if (toolCalls != null) {
+                    for (i in 0 until toolCalls.length()) {
+                        val toolCall = toolCalls.getJSONObject(i)
+                        val function = toolCall.optJSONObject("function")
+                        if (function != null) {
+                            val functionName = function.getString("name")
+                            val functionArgs = function.optString("arguments", "{}")
+                            val callId = toolCall.optString("id", "")
+                            
+                            val argsMap = try {
+                                jsonObjectToMap(JSONObject(functionArgs))
+                            } catch (e: Exception) {
+                                emptyMap<String, Any>()
+                            }
+                            
+                            val functionCall = FunctionCall(
+                                name = functionName,
+                                args = argsMap,
+                                id = callId
+                            )
+                            onToolCall(functionCall)
+                            toolCallsToExecute.add(Triple(functionCall, ToolResult(llmContent = "", returnDisplay = ""), callId))
+                        }
+                    }
+                }
+                
+                val finishReason = choice.optString("finish_reason", "stop")
+                return when (finishReason) {
+                    "stop" -> "STOP"
+                    "length" -> "MAX_TOKENS"
+                    "tool_calls" -> null // Continue for tool calls
+                    else -> finishReason.uppercase()
+                }
+            }
+        }
+        return "STOP"
+    }
+    
+    /**
+     * Parse Anthropic response format
+     */
+    private fun parseAnthropicResponse(
+        bodyString: String,
+        onChunk: (String) -> Unit,
+        onToolCall: (FunctionCall) -> Unit,
+        onToolResult: (String, Map<String, Any>) -> Unit,
+        toolCallsToExecute: MutableList<Triple<FunctionCall, ToolResult, String>>
+    ): String? {
+        val json = JSONObject(bodyString)
+        val content = json.optJSONArray("content")
+        if (content != null) {
+            for (i in 0 until content.length()) {
+                val contentItem = content.getJSONObject(i)
+                val type = contentItem.optString("type", "")
+                when (type) {
+                    "text" -> {
+                        val text = contentItem.optString("text", "")
+                        if (text.isNotEmpty()) {
+                            onChunk(text)
+                        }
+                    }
+                    "tool_use" -> {
+                        val toolId = contentItem.optString("id", "")
+                        val toolName = contentItem.optString("name", "")
+                        val toolInput = contentItem.optJSONObject("input")
+                        val argsMap = if (toolInput != null) {
+                            jsonObjectToMap(toolInput)
+                        } else {
+                            emptyMap<String, Any>()
+                        }
+                        
+                        val functionCall = FunctionCall(
+                            name = toolName,
+                            args = argsMap,
+                            id = toolId
+                        )
+                        onToolCall(functionCall)
+                        toolCallsToExecute.add(Triple(functionCall, ToolResult(llmContent = "", returnDisplay = ""), toolId))
+                    }
+                }
+            }
+        }
+        
+        val stopReason = json.optString("stop_reason", "end_turn")
+        return when (stopReason) {
+            "end_turn" -> "STOP"
+            "max_tokens" -> "MAX_TOKENS"
+            "stop_sequence" -> "STOP"
+            else -> "STOP"
+        }
+    }
+    
+    /**
+     * Parse Ollama response format
+     */
+    private fun parseOllamaResponse(
+        bodyString: String,
+        onChunk: (String) -> Unit,
+        onToolCall: (FunctionCall) -> Unit,
+        onToolResult: (String, Map<String, Any>) -> Unit,
+        toolCallsToExecute: MutableList<Triple<FunctionCall, ToolResult, String>>
+    ): String? {
+        val json = JSONObject(bodyString)
+        val message = json.optJSONObject("message")
+        if (message != null) {
+            val content = message.optString("content", "")
+            if (content.isNotEmpty()) {
+                onChunk(content)
+            }
+            
+            // Ollama tool calls (if supported)
+            val toolCalls = message.optJSONArray("tool_calls")
+            if (toolCalls != null) {
+                for (i in 0 until toolCalls.length()) {
+                    val toolCall = toolCalls.getJSONObject(i)
+                    val function = toolCall.optJSONObject("function")
+                    if (function != null) {
+                        val functionName = function.getString("name")
+                        val functionArgs = function.optString("arguments", "{}")
+                        val callId = toolCall.optString("id", "")
+                        
+                        val argsMap = try {
+                            jsonObjectToMap(JSONObject(functionArgs))
+                        } catch (e: Exception) {
+                            emptyMap<String, Any>()
+                        }
+                        
+                        val functionCall = FunctionCall(
+                            name = functionName,
+                            args = argsMap,
+                            id = callId
+                        )
+                        onToolCall(functionCall)
+                        toolCallsToExecute.add(Triple(functionCall, ToolResult(llmContent = "", returnDisplay = ""), callId))
+                    }
+                }
+            }
+        }
+        
+        val done = json.optBoolean("done", false)
+        return if (done) "STOP" else null
+    }
+    
+    /**
+     * Convert Gemini request format to OpenAI format
+     */
+    private fun convertRequestToOpenAI(geminiRequest: JSONObject, model: String): JSONObject {
+        val openAIRequest = JSONObject()
+        openAIRequest.put("model", model)
+        openAIRequest.put("stream", false) // Non-streaming for now
+        
+        val messages = JSONArray()
+        val contents = geminiRequest.optJSONArray("contents")
+        if (contents != null) {
+            for (i in 0 until contents.length()) {
+                val content = contents.getJSONObject(i)
+                val role = content.optString("role", "user")
+                val parts = content.optJSONArray("parts")
+                if (parts != null) {
+                    val messageContent = StringBuilder()
+                    val toolCalls = JSONArray()
+                    
+                    for (j in 0 until parts.length()) {
+                        val part = parts.getJSONObject(j)
+                        if (part.has("text")) {
+                            messageContent.append(part.getString("text"))
+                        } else if (part.has("functionCall")) {
+                            // Convert function call to OpenAI format
+                            val functionCall = part.getJSONObject("functionCall")
+                            val toolCall = JSONObject()
+                            toolCall.put("id", functionCall.optString("id", ""))
+                            toolCall.put("type", "function")
+                            val function = JSONObject()
+                            function.put("name", functionCall.getString("name"))
+                            function.put("arguments", JSONObject(functionCall.getJSONObject("args")).toString())
+                            toolCall.put("function", function)
+                            toolCalls.put(toolCall)
+                        } else if (part.has("functionResponse")) {
+                            // Function response - add as assistant message with tool_calls
+                            val functionResponse = part.getJSONObject("functionResponse")
+                            val assistantMsg = JSONObject()
+                            assistantMsg.put("role", "assistant")
+                            assistantMsg.put("content", null)
+                            val toolCallsArray = JSONArray()
+                            val toolCall = JSONObject()
+                            toolCall.put("id", functionResponse.optString("id", ""))
+                            toolCall.put("type", "function")
+                            val function = JSONObject()
+                            function.put("name", functionResponse.getString("name"))
+                            function.put("arguments", "{}")
+                            toolCall.put("function", function)
+                            toolCallsArray.put(toolCall)
+                            assistantMsg.put("tool_calls", toolCallsArray)
+                            messages.put(assistantMsg)
+                            
+                            // Add tool result as separate message
+                            val toolMsg = JSONObject()
+                            toolMsg.put("role", "tool")
+                            toolMsg.put("tool_call_id", functionResponse.optString("id", ""))
+                            toolMsg.put("content", JSONObject(functionResponse.getJSONObject("response")).toString())
+                            messages.put(toolMsg)
+                            continue
+                        }
+                    }
+                    
+                    if (messageContent.isNotEmpty() || toolCalls.length() > 0) {
+                        val message = JSONObject()
+                        message.put("role", when (role) {
+                            "model" -> "assistant"
+                            else -> role
+                        })
+                        if (messageContent.isNotEmpty()) {
+                            message.put("content", messageContent.toString())
+                        }
+                        if (toolCalls.length() > 0) {
+                            message.put("tool_calls", toolCalls)
+                        }
+                        messages.put(message)
+                    }
+                }
+            }
+        }
+        openAIRequest.put("messages", messages)
+        
+        // Convert tools
+        val tools = geminiRequest.optJSONArray("tools")
+        if (tools != null && tools.length() > 0) {
+            val tool = tools.getJSONObject(0)
+            val functionDeclarations = tool.optJSONArray("functionDeclarations")
+            if (functionDeclarations != null) {
+                val openAITools = JSONArray()
+                for (i in 0 until functionDeclarations.length()) {
+                    val decl = functionDeclarations.getJSONObject(i)
+                    val toolObj = JSONObject()
+                    toolObj.put("type", "function")
+                    val function = JSONObject()
+                    function.put("name", decl.getString("name"))
+                    function.put("description", decl.optString("description", ""))
+                    function.put("parameters", decl.getJSONObject("parameters"))
+                    toolObj.put("function", function)
+                    openAITools.put(toolObj)
+                }
+                openAIRequest.put("tools", openAITools)
+            }
+        }
+        
+        return openAIRequest
+    }
+    
+    /**
+     * Convert Gemini request format to Anthropic format
+     */
+    private fun convertRequestToAnthropic(geminiRequest: JSONObject, model: String): JSONObject {
+        val anthropicRequest = JSONObject()
+        anthropicRequest.put("model", model)
+        anthropicRequest.put("max_tokens", 4096)
+        
+        val messages = JSONArray()
+        val contents = geminiRequest.optJSONArray("contents")
+        if (contents != null) {
+            for (i in 0 until contents.length()) {
+                val content = contents.getJSONObject(i)
+                val role = content.optString("role", "user")
+                val parts = content.optJSONArray("parts")
+                if (parts != null) {
+                    val message = JSONObject()
+                    message.put("role", when (role) {
+                        "model" -> "assistant"
+                        else -> role
+                    })
+                    
+                    val contentArray = JSONArray()
+                    for (j in 0 until parts.length()) {
+                        val part = parts.getJSONObject(j)
+                        if (part.has("text")) {
+                            val textObj = JSONObject()
+                            textObj.put("type", "text")
+                            textObj.put("text", part.getString("text"))
+                            contentArray.put(textObj)
+                        } else if (part.has("functionResponse")) {
+                            // Anthropic uses tool_use blocks
+                            val functionResponse = part.getJSONObject("functionResponse")
+                            val toolUse = JSONObject()
+                            toolUse.put("type", "tool_use")
+                            toolUse.put("id", functionResponse.optString("id", ""))
+                            toolUse.put("name", functionResponse.getString("name"))
+                            toolUse.put("input", functionResponse.getJSONObject("response"))
+                            contentArray.put(toolUse)
+                        }
+                    }
+                    message.put("content", contentArray)
+                    messages.put(message)
+                }
+            }
+        }
+        anthropicRequest.put("messages", messages)
+        
+        // Convert tools
+        val tools = geminiRequest.optJSONArray("tools")
+        if (tools != null && tools.length() > 0) {
+            val tool = tools.getJSONObject(0)
+            val functionDeclarations = tool.optJSONArray("functionDeclarations")
+            if (functionDeclarations != null) {
+                val anthropicTools = JSONArray()
+                for (i in 0 until functionDeclarations.length()) {
+                    val decl = functionDeclarations.getJSONObject(i)
+                    val toolObj = JSONObject()
+                    toolObj.put("name", decl.getString("name"))
+                    toolObj.put("description", decl.optString("description", ""))
+                    toolObj.put("input_schema", decl.getJSONObject("parameters"))
+                    anthropicTools.put(toolObj)
+                }
+                anthropicRequest.put("tools", anthropicTools)
+            }
+        }
+        
+        return anthropicRequest
+    }
+    
+    /**
+     * Convert Gemini request format to Ollama format
+     */
+    private fun convertRequestToOllama(geminiRequest: JSONObject, model: String): JSONObject {
+        val ollamaRequest = JSONObject()
+        ollamaRequest.put("model", model)
+        ollamaRequest.put("stream", false) // Non-streaming
+        
+        val messages = JSONArray()
+        val contents = geminiRequest.optJSONArray("contents")
+        if (contents != null) {
+            for (i in 0 until contents.length()) {
+                val content = contents.getJSONObject(i)
+                val role = content.optString("role", "user")
+                val parts = content.optJSONArray("parts")
+                if (parts != null) {
+                    val messageContent = StringBuilder()
+                    for (j in 0 until parts.length()) {
+                        val part = parts.getJSONObject(j)
+                        if (part.has("text")) {
+                            messageContent.append(part.getString("text"))
+                        }
+                    }
+                    
+                    if (messageContent.isNotEmpty()) {
+                        val message = JSONObject()
+                        message.put("role", when (role) {
+                            "model" -> "assistant"
+                            else -> role
+                        })
+                        message.put("content", messageContent.toString())
+                        messages.put(message)
+                    }
+                }
+            }
+        }
+        ollamaRequest.put("messages", messages)
+        
+        // Ollama tools (if supported)
+        val tools = geminiRequest.optJSONArray("tools")
+        if (tools != null && tools.length() > 0) {
+            val tool = tools.getJSONObject(0)
+            val functionDeclarations = tool.optJSONArray("functionDeclarations")
+            if (functionDeclarations != null) {
+                val ollamaTools = JSONArray()
+                for (i in 0 until functionDeclarations.length()) {
+                    val decl = functionDeclarations.getJSONObject(i)
+                    val toolObj = JSONObject()
+                    toolObj.put("type", "function")
+                    val function = JSONObject()
+                    function.put("name", decl.getString("name"))
+                    function.put("description", decl.optString("description", ""))
+                    function.put("parameters", decl.getJSONObject("parameters"))
+                    toolObj.put("function", function)
+                    ollamaTools.put(toolObj)
+                }
+                ollamaRequest.put("tools", ollamaTools)
+            }
+        }
+        
+        return ollamaRequest
+    }
+    
     private fun processResponse(
         json: JSONObject,
         onChunk: (String) -> Unit,
         onToolCall: (FunctionCall) -> Unit,
         onToolResult: (String, Map<String, Any>) -> Unit,
-        toolCallsToExecute: MutableList<Triple<FunctionCall, ToolResult, String>>
+        toolCallsToExecute: MutableList<Triple<FunctionCall, ToolResult, String>>,
+        providerType: ApiProviderType = ApiProviderType.GOOGLE
     ): String? {
         var finishReason: String? = null
         val candidates = json.optJSONArray("candidates")
