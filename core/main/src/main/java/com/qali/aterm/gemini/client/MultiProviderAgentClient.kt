@@ -5817,12 +5817,23 @@ exports.$functionName = (req, res, next) => {
         onToolResult: (String, Map<String, Any>) -> Unit
     ): Flow<GeminiStreamEvent> = flow {
         val signal = CancellationSignal() // Create local signal for non-streaming mode
-        android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Starting non-streaming mode")
+        android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Starting non-streaming mode - flow builder started")
         
-        // Emit initial event immediately to ensure flow is active before setup work
-        // This prevents the flow from being cancelled before it can start emitting
-        emit(GeminiStreamEvent.Chunk("🚀 Starting...\n"))
-        onChunk("🚀 Starting...\n")
+        try {
+            // Emit initial event immediately to ensure flow is active before setup work
+            // This prevents the flow from being cancelled before it can start emitting
+            android.util.Log.d("GeminiClient", "sendMessageNonStreaming: About to emit initial event")
+            emit(GeminiStreamEvent.Chunk("🚀 Starting...\n"))
+            onChunk("🚀 Starting...\n")
+            android.util.Log.d("GeminiClient", "sendMessageNonStreaming: Initial event emitted successfully")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            android.util.Log.e("GeminiClient", "Flow builder cancelled before initial emit", e)
+            throw e
+        } catch (e: Exception) {
+            android.util.Log.e("GeminiClient", "Error emitting initial event in sendMessageNonStreaming", e)
+            emit(GeminiStreamEvent.Error("Failed to start: ${e.message}"))
+            return@flow
+        }
         
         // Add user message to history
         chatHistory.add(

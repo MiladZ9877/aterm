@@ -366,6 +366,58 @@ fun RootfsSettings(
                         }
                     }
 
+                    // File picker - show button to pick file if none selected
+                    if (selectedType == RootfsType.FILE_PICKER && selectedFile == null) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.FolderOpen,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Text(
+                                        text = "2. Select Rootfs File",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Button(
+                                    onClick = {
+                                        if (checkStoragePermission()) {
+                                            showFilePicker = true
+                                        } else {
+                                            requestStoragePermission()
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    leadingIcon = { Icon(Icons.Default.FolderOpen, null) }
+                                ) {
+                                    Text("Browse Files")
+                                }
+                                Text(
+                                    text = "Select a .tar.gz or .tar file from your device",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    
                     // File picker result
                     if (selectedType == RootfsType.FILE_PICKER && selectedFile != null) {
                         Card(

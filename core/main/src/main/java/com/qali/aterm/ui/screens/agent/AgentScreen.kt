@@ -1896,8 +1896,10 @@ fun AgentScreen(
                                     val job = scope.launch {
                                         // Cancel previous job if any
                                         currentAgentJob?.cancel()
-                                        // Store this job reference - use the launch job itself
-                                        currentAgentJob = this.coroutineContext[Job]
+                                        // Store this job reference
+                                        val currentJobFromContext = coroutineContext[Job]
+                                        currentAgentJob = currentJobFromContext
+                                        android.util.Log.d("AgentScreen", "Job stored: ${currentJobFromContext != null}, isActive: ${currentJobFromContext?.isActive}")
                                         
                                         android.util.Log.d("AgentScreen", "Starting message send for: ${prompt.take(50)}...")
                                         val loadingMessage = AgentMessage(
@@ -1978,9 +1980,17 @@ fun AgentScreen(
                                             
                                             // Collect stream events
                                             android.util.Log.d("AgentScreen", "Starting to collect stream events")
-                                            val currentJob = this@launch.coroutineContext[Job]
+                                            val currentJob = coroutineContext[Job]
+                                            android.util.Log.d("AgentScreen", "Current job before collect: ${currentJob != null}, isActive: ${currentJob?.isActive}")
+                                            // Ensure job is active before collecting
+                                            if (currentJob?.isActive != true) {
+                                                android.util.Log.w("AgentScreen", "Job is not active before stream collection, cancelling")
+                                                return@launch
+                                            }
                                             try {
+                                                android.util.Log.d("AgentScreen", "About to start stream.collect")
                                                 stream.collect { event ->
+                                                    android.util.Log.d("AgentScreen", "Stream collect lambda called, job active: ${currentJob?.isActive}")
                                                     // Check if paused - if so, wait until resumed (only if actually paused)
                                                     if (isPaused) {
                                                         while (isPaused && currentJob?.isActive == true) {
