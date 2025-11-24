@@ -367,11 +367,15 @@ fun RootfsSettings(
                     }
 
                     // File picker - show button to pick file if none selected
-                    if (selectedType == RootfsType.FILE_PICKER && selectedFile == null) {
+                    if (selectedType == RootfsType.FILE_PICKER) {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                                containerColor = if (selectedFile == null) {
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                                } else {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                                }
                             ),
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                         ) {
@@ -390,93 +394,61 @@ fun RootfsSettings(
                                         modifier = Modifier.size(20.dp)
                                     )
                                     Text(
-                                        text = "2. Select Rootfs File",
+                                        text = if (selectedFile == null) "2. Select Rootfs File" else "Selected File",
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.primary
                                     )
                                 }
-                                Button(
-                                    onClick = {
-                                        if (checkStoragePermission()) {
-                                            showFilePicker = true
-                                        } else {
-                                            requestStoragePermission()
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.FolderOpen,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Browse Files")
-                                }
-                                Text(
-                                    text = "Select a .tar.gz or .tar file from your device",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                    
-                    // File picker result
-                    if (selectedType == RootfsType.FILE_PICKER && selectedFile != null) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
-                            ),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Selected File",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                                    )
-                                    Text(
-                                        text = selectedFile!!.name,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                                    )
-                                    Text(
-                                        text = selectedFile!!.absolutePath,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                                        maxLines = 2
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { 
-                                        selectedFile = null
-                                        if (selectedType == RootfsType.FILE_PICKER) {
-                                            selectedType = null
-                                        }
+                                if (selectedFile == null) {
+                                    Button(
+                                        onClick = {
+                                            if (checkStoragePermission()) {
+                                                showFilePicker = true
+                                            } else {
+                                                requestStoragePermission()
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.FolderOpen,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Browse Files")
                                     }
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Clear selection",
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                    Text(
+                                        text = "Select a .tar.gz or .tar file from your device",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                } else {
+                                    // Show selected file info
+                                    Column {
+                                        Text(
+                                            text = selectedFile!!.name,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            text = selectedFile!!.absolutePath,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            selectedFile = null
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Change File")
+                                    }
                                 }
                             }
                         }
