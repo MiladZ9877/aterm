@@ -37,10 +37,10 @@ jobs:
         run: echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
       - name: Clean build
-        run: ./gradlew clean
+        run: ./gradlew clean --quiet
 
       - name: Build with Gradle
-        run: ./gradlew assembleFdroidRelease --stacktrace --info || (./gradlew clean && ./gradlew assembleFdroidRelease --stacktrace)
+        run: ./gradlew assembleFdroidRelease --quiet || (./gradlew clean --quiet && ./gradlew assembleFdroidRelease --stacktrace)
         env:
           KEYSTORE_FILE: /tmp/xed.keystore
           SIGNING_PROPERTIES_FILE: /tmp/signing.properties

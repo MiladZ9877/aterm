@@ -1981,12 +1981,12 @@ fun AgentScreen(
                                             try {
                                                 stream.collect { event ->
                                                     // Check if paused - if so, wait until resumed
-                                                    while (isPaused && !this@launch.isCancelled) {
+                                                    while (isPaused && coroutineContext.isActive) {
                                                         kotlinx.coroutines.delay(100)
                                                     }
                                                     
                                                     // Check if cancelled
-                                                    if (this@launch.isCancelled) {
+                                                    if (!coroutineContext.isActive) {
                                                         android.util.Log.d("AgentScreen", "Stream collection cancelled")
                                                         return@collect
                                                     }
