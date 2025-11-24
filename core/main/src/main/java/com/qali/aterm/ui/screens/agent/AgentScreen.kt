@@ -11,7 +11,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.AddCircle
@@ -23,7 +22,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -49,8 +47,6 @@ import com.rk.settings.Settings
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -1509,9 +1505,6 @@ fun AgentScreen(
     var showWorkspacePicker by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
     var showDebugDialog by remember { mutableStateOf(false) }
-    // Use StateFlow for isPaused so coroutines can properly observe state changes
-    val isPausedFlow = remember(sessionId) { MutableStateFlow(false) }
-    val isPaused by isPausedFlow.collectAsState()
     var showSessionMenu by remember { mutableStateOf(false) }
     var showTerminateDialog by remember { mutableStateOf(false) }
     var showNewSessionDialog by remember { mutableStateOf(false) }
@@ -1546,9 +1539,6 @@ fun AgentScreen(
             workspaceRoot = it
         }
         
-        // Don't restore pause state - agent should always start active
-        // isPaused is initialized to false and should remain a temporary UI state
-        
         if (loadedHistory.isNotEmpty()) {
             messages = loadedHistory
             messageHistory = loadedHistory
@@ -1569,7 +1559,7 @@ fun AgentScreen(
     
     // Save history and metadata whenever they change (debounced to avoid too frequent saves)
     // Also save immediately when sessionId changes to preserve work when switching tabs
-    LaunchedEffect(messages, sessionId, workspaceRoot, isPaused, currentResponseText) {
+    LaunchedEffect(messages, sessionId, workspaceRoot, currentResponseText) {
         if (messages.isNotEmpty()) {
             // Save immediately (no debounce) when session changes to preserve work
             val shouldDebounce = true // Can be made configurable
@@ -1589,7 +1579,7 @@ fun AgentScreen(
         // Save session metadata (workspace, pause state, etc.)
         val metadata = SessionMetadata(
             workspaceRoot = workspaceRoot,
-            isPaused = isPaused,
+            isPaused = false,
             lastPrompt = messages.lastOrNull()?.takeIf { it.isUser }?.text,
             currentResponseText = currentResponseText.takeIf { it.isNotEmpty() }
         )
@@ -1653,21 +1643,6 @@ fun AgentScreen(
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
-                        if (isPaused) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.errorContainer,
-                                shape = RoundedCornerShape(4.dp)
-                            ) {
-                                Text(
-                                    text = "PAUSED",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 10.sp
-                                )
-                            }
-                        }
                     }
                     Text(
                         text = workspaceRoot,
@@ -1684,39 +1659,6 @@ fun AgentScreen(
                     Icon(
                         Icons.Default.Folder, 
                         contentDescription = "Change Workspace", 
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                // Pause/Resume button
-                IconButton(
-                    onClick = { 
-                        isPausedFlow.value = !isPausedFlow.value
-                        // Cancel current job if pausing
-                        if (isPausedFlow.value) {
-                            android.util.Log.d("AgentScreen", "Session $sessionId paused - cancelling current job")
-                            currentAgentJob?.cancel()
-                            currentAgentJob = null
-                        }
-                        // Save pause state immediately
-                        val metadata = SessionMetadata(
-                            workspaceRoot = workspaceRoot,
-                            isPaused = isPaused,
-                            lastPrompt = messages.lastOrNull()?.takeIf { it.isUser }?.text,
-                            currentResponseText = currentResponseText.takeIf { it.isNotEmpty() }
-                        )
-                        HistoryPersistenceService.saveSessionMetadata(sessionId, metadata)
-                        if (isPaused) {
-                            android.util.Log.d("AgentScreen", "Session $sessionId paused")
-                        } else {
-                            android.util.Log.d("AgentScreen", "Session $sessionId resumed")
-                        }
-                    },
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isPaused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause,
-                        contentDescription = if (isPaused) "Resume" else "Pause",
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.size(18.dp)
                     )
@@ -1747,24 +1689,6 @@ fun AgentScreen(
                             },
                             leadingIcon = {
                                 Icon(Icons.Outlined.AddCircle, contentDescription = null)
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(if (isPaused) "Resume Session" else "Pause Session") },
-                            onClick = {
-                                isPausedFlow.value = !isPausedFlow.value
-                                // Cancel current job if pausing
-                                if (isPausedFlow.value) {
-                                    currentAgentJob?.cancel()
-                                    currentAgentJob = null
-                                }
-                                showSessionMenu = false
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    if (isPaused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause,
-                                    contentDescription = null
-                                )
                             }
                         )
                         Divider()
@@ -1878,12 +1802,11 @@ fun AgentScreen(
             ) {
                 OutlinedTextField(
                     value = inputText,
-                    onValueChange = { if (!isPaused) inputText = it },
+                    onValueChange = { inputText = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text(if (isPaused) "Session paused - click resume to continue" else "Ask the agent...") },
+                    placeholder = { Text("Ask the agent...") },
                     maxLines = 5,
                     shape = RoundedCornerShape(24.dp),
-                    enabled = !isPaused,
                     trailingIcon = {
                         IconButton(
                             onClick = {
@@ -1921,7 +1844,6 @@ fun AgentScreen(
                                                 (aiClient as OllamaClient).sendMessageStream(
                                                     userMessage = prompt,
                                                     onChunk = { chunk ->
-                                                        if (isPausedFlow.value) return@sendMessageStream
                                                         currentResponseText += chunk
                                                         val currentMessages = if (messages.isNotEmpty()) messages.dropLast(1) else messages
                                                         messages = currentMessages + AgentMessage(
@@ -1931,7 +1853,6 @@ fun AgentScreen(
                                                         )
                                                     },
                                                     onToolCall = { functionCall ->
-                                                        if (isPausedFlow.value) return@sendMessageStream
                                                         val toolMessage = AgentMessage(
                                                             text = "🔧 Calling tool: ${functionCall.name}",
                                                             isUser = false,
@@ -1940,7 +1861,6 @@ fun AgentScreen(
                                                         messages = messages + toolMessage
                                                     },
                                                     onToolResult = { toolName, args ->
-                                                        if (isPausedFlow.value) return@sendMessageStream
                                                         val resultMessage = AgentMessage(
                                                             text = "✅ Tool '$toolName' completed",
                                                             isUser = false,
@@ -1953,7 +1873,6 @@ fun AgentScreen(
                                                 (aiClient as GeminiClient).sendMessageStream(
                                                     userMessage = prompt,
                                                     onChunk = { chunk ->
-                                                        if (isPausedFlow.value) return@sendMessageStream
                                                         currentResponseText += chunk
                                                         val currentMessages = if (messages.isNotEmpty()) messages.dropLast(1) else messages
                                                         messages = currentMessages + AgentMessage(
@@ -1963,7 +1882,6 @@ fun AgentScreen(
                                                         )
                                                     },
                                                     onToolCall = { functionCall ->
-                                                        if (isPausedFlow.value) return@sendMessageStream
                                                         val toolMessage = AgentMessage(
                                                             text = "🔧 Calling tool: ${functionCall.name}",
                                                             isUser = false,
@@ -1972,7 +1890,6 @@ fun AgentScreen(
                                                         messages = messages + toolMessage
                                                     },
                                                     onToolResult = { toolName, args ->
-                                                        if (isPausedFlow.value) return@sendMessageStream
                                                         val resultMessage = AgentMessage(
                                                             text = "✅ Tool '$toolName' completed",
                                                             isUser = false,
@@ -1998,27 +1915,6 @@ fun AgentScreen(
                                                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                                                     stream.collect { event ->
                                                     android.util.Log.d("AgentScreen", "Stream collect lambda called, job active: ${currentJob?.isActive}")
-                                                    // Check if paused - if so, wait until resumed (only if actually paused)
-                                                    // Use StateFlow to properly observe pause state changes in coroutine
-                                                    if (isPausedFlow.value) {
-                                                        // Wait for the pause state to become false using StateFlow
-                                                        // This will suspend until isPaused becomes false
-                                                        try {
-                                                            isPausedFlow.first { !it }
-                                                        } catch (e: kotlinx.coroutines.CancellationException) {
-                                                            // Job was cancelled during pause
-                                                            android.util.Log.d("AgentScreen", "Stream collection cancelled during pause")
-                                                            return@collect
-                                                        }
-                                                        // After resuming, check if job was cancelled during pause
-                                                        if (currentJob?.isActive != true) {
-                                                            android.util.Log.d("AgentScreen", "Stream collection cancelled during pause")
-                                                            return@collect
-                                                        }
-                                                    }
-                                                    
-                                                    // Removed premature cancellation check - let CancellationException handle proper cancellations
-                                                    // The check was too aggressive and could cancel the stream incorrectly
                                                     
                                                     try {
                                                         android.util.Log.d("AgentScreen", "Received stream event: ${event.javaClass.simpleName}")
@@ -2119,23 +2015,9 @@ fun AgentScreen(
                                                 } // closes withContext
                                             } catch (e: kotlinx.coroutines.CancellationException) {
                                                 android.util.Log.d("AgentScreen", "Stream collection cancelled")
-                                                // Only show paused message if actually paused, otherwise it was cancelled for another reason
-                                                if (isPaused) {
-                                                    // Clean up loading message
-                                                    if (messages.isNotEmpty() && messages.last().text == "Thinking...") {
-                                                        messages = messages.dropLast(1)
-                                                    }
-                                                    val pausedMessage = AgentMessage(
-                                                        text = "⏸️ Workflow paused",
-                                                        isUser = false,
-                                                        timestamp = System.currentTimeMillis()
-                                                    )
-                                                    messages = messages + pausedMessage
-                                                } else {
-                                                    // Clean up loading message for non-pause cancellations
-                                                    if (messages.isNotEmpty() && messages.last().text == "Thinking...") {
-                                                        messages = messages.dropLast(1)
-                                                    }
+                                                // Clean up loading message for cancellations
+                                                if (messages.isNotEmpty() && messages.last().text == "Thinking...") {
+                                                    messages = messages.dropLast(1)
                                                 }
                                                 throw e
                                             } catch (e: Exception) {
@@ -2195,7 +2077,7 @@ fun AgentScreen(
                                     currentAgentJob = job
                                 }
                             },
-                            enabled = inputText.isNotBlank() && !isPaused
+                            enabled = inputText.isNotBlank()
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Send,
@@ -2223,7 +2105,7 @@ fun AgentScreen(
                 // Save workspace directory immediately
                 val metadata = SessionMetadata(
                     workspaceRoot = workspaceRoot,
-                    isPaused = isPaused,
+                    isPaused = false,
                     lastPrompt = messages.lastOrNull()?.takeIf { it.isUser }?.text,
                     currentResponseText = currentResponseText.takeIf { it.isNotEmpty() }
                 )
@@ -2376,7 +2258,6 @@ fun AgentScreen(
                             messages = emptyList()
                             messageHistory = emptyList()
                             inputText = ""
-                            isPausedFlow.value = false
                             currentResponseText = ""
                             
                             // Clear client history
@@ -2461,9 +2342,6 @@ fun AgentScreen(
                                 aiClient.resetChat()
                             }
                             
-                            // Reset pause state
-                            isPausedFlow.value = false
-                            
                             showTerminateDialog = false
                         }
                     },
@@ -2482,36 +2360,6 @@ fun AgentScreen(
         )
     }
     
-    // Paused indicator
-    if (isPaused) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Pause,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-                Text(
-                    "Session Paused - Click resume to continue",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
     
     // Keys Exhausted Dialog with Wait and Retry
     if (showKeysExhaustedDialog) {
