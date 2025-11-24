@@ -52,7 +52,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineContext
 import android.os.Build
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -1899,7 +1898,8 @@ fun AgentScreen(
                                     val job = scope.launch {
                                         // Cancel previous job if any
                                         currentAgentJob?.cancel()
-                                        currentAgentJob = coroutineContext[Job]
+                                        // Store this job reference
+                                        currentAgentJob = this@launch.coroutineContext[Job]
                                         
                                         android.util.Log.d("AgentScreen", "Starting message send for: ${prompt.take(50)}...")
                                         val loadingMessage = AgentMessage(
@@ -1980,16 +1980,16 @@ fun AgentScreen(
                                             
                                             // Collect stream events
                                             android.util.Log.d("AgentScreen", "Starting to collect stream events")
-                                            val jobContext = coroutineContext[Job]
+                                            val currentJob = this@launch.coroutineContext[Job]
                                             try {
                                                 stream.collect { event ->
                                                     // Check if paused - if so, wait until resumed
-                                                    while (isPaused && jobContext?.isActive == true) {
+                                                    while (isPaused && currentJob?.isActive == true) {
                                                         kotlinx.coroutines.delay(100)
                                                     }
                                                     
                                                     // Check if cancelled
-                                                    if (jobContext?.isActive != true) {
+                                                    if (currentJob?.isActive != true) {
                                                         android.util.Log.d("AgentScreen", "Stream collection cancelled")
                                                         return@collect
                                                     }
