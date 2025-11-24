@@ -1827,7 +1827,6 @@ fun AgentScreen(
                                         // Store this job reference
                                         val currentJobFromContext = coroutineContext[Job]
                                         currentAgentJob = currentJobFromContext
-                                        android.util.Log.d("AgentScreen", "Job stored: ${currentJobFromContext != null}, isActive: ${currentJobFromContext?.isActive}")
                                         
                                         android.util.Log.d("AgentScreen", "Starting message send for: ${prompt.take(50)}...")
                                         val loadingMessage = AgentMessage(
@@ -1903,12 +1902,6 @@ fun AgentScreen(
                                             // Collect stream events
                                             android.util.Log.d("AgentScreen", "Starting to collect stream events")
                                             val currentJob = coroutineContext[Job]
-                                            android.util.Log.d("AgentScreen", "Current job before collect: ${currentJob != null}, isActive: ${currentJob?.isActive}")
-                                            // Ensure job is active before collecting
-                                            if (currentJob?.isActive != true) {
-                                                android.util.Log.w("AgentScreen", "Job is not active before stream collection, cancelling")
-                                                return@launch
-                                            }
                                             try {
                                                 android.util.Log.d("AgentScreen", "About to start stream.collect")
                                                 // Collect on IO dispatcher to avoid blocking main thread
