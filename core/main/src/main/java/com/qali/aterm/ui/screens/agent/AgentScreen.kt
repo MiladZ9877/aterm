@@ -1541,10 +1541,8 @@ fun AgentScreen(
             workspaceRoot = it
         }
         
-        // Restore pause state
-        loadedMetadata?.isPaused?.let {
-            isPaused = it
-        }
+        // Don't restore pause state - agent should always start active
+        // isPaused is initialized to false and should remain a temporary UI state
         
         if (loadedHistory.isNotEmpty()) {
             messages = loadedHistory
