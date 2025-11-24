@@ -1161,8 +1161,8 @@ fun DebugDialog(
                 // API call statistics (from logcat)
                 val apiCalls = logcatLogs?.split("\n")?.count { it.contains("makeApiCall") } ?: 0
                 val apiSuccess = logcatLogs?.split("\n")?.count { it.contains("makeApiCall") && it.contains("Response code: 200") } ?: 0
+                val apiSuccessRate = if (apiCalls > 0) (apiSuccess * 100.0 / apiCalls).toInt() else 0
                 if (apiCalls > 0) {
-                    val apiSuccessRate = (apiSuccess * 100.0 / apiCalls).toInt()
                     testInfoBuilder.appendLine()
                     testInfoBuilder.appendLine("API Calls:")
                     testInfoBuilder.appendLine("  - Total: $apiCalls")
