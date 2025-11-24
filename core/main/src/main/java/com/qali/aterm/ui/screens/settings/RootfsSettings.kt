@@ -64,13 +64,22 @@ fun RootfsSettings(
     ) { permissions ->
         val hasStoragePermission = permissions[Manifest.permission.READ_EXTERNAL_STORAGE] == true ||
                 (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && 
-                 permissions[Manifest.permission.READ_MEDIA_IMAGES] == true)
+                 (permissions[Manifest.permission.READ_MEDIA_IMAGES] == true ||
+                  permissions[Manifest.permission.READ_MEDIA_VIDEO] == true ||
+                  permissions[Manifest.permission.READ_MEDIA_AUDIO] == true))
         
-        if (hasStoragePermission && showFilePicker) {
-            // Permission granted, file picker will show files
-        } else if (!hasStoragePermission && showFilePicker) {
-            errorMessage = "Storage permission is required to pick files"
-            showFilePicker = false
+        if (hasStoragePermission) {
+            // Permission granted, show file picker if FILE_PICKER is selected
+            if (selectedType == RootfsType.FILE_PICKER) {
+                showFilePicker = true
+            }
+        } else {
+            // Permission denied
+            if (selectedType == RootfsType.FILE_PICKER) {
+                errorMessage = "Storage permission is required to pick files"
+                selectedType = null // Reset selection
+                showFilePicker = false
+            }
         }
     }
     
@@ -216,9 +225,8 @@ fun RootfsSettings(
                                 if (checkStoragePermission()) {
                                     showFilePicker = true
                                 } else {
+                                    // Request permission first, then show picker after permission is granted
                                     requestStoragePermission()
-                                    // showFilePicker will be set to true after permission is granted
-                                    showFilePicker = true
                                 }
                             },
                             label = { Text("📁 Pick File") }
@@ -722,46 +730,38 @@ fun RootfsSettings(
     }
     
     // File picker dialog - shows on top of install dialog
-    if (showFilePicker && checkStoragePermission()) {
-        FilePickerDialog(
-            context = context,
-            initialPath = getInitialStoragePath(context),
-            onDismiss = { 
-                showFilePicker = false
-            },
-            onFileSelected = { file ->
-                if (file.name.endsWith(".tar.gz", ignoreCase = true) || file.name.endsWith(".tar", ignoreCase = true)) {
-                    selectedFile = file
-                    if (rootfsName.isBlank()) {
-                        rootfsName = file.name.substringBeforeLast(".")
+    if (showFilePicker) {
+        if (checkStoragePermission()) {
+            FilePickerDialog(
+                context = context,
+                initialPath = getInitialStoragePath(context),
+                onDismiss = { 
+                    showFilePicker = false
+                    // Reset selection if user cancels without selecting
+                    if (selectedFile == null && selectedType == RootfsType.FILE_PICKER) {
+                        selectedType = null
                     }
-                    showFilePicker = false
-                    errorMessage = null // Clear any previous errors
-                } else {
-                    errorMessage = "Please select a .tar.gz or .tar file"
-                    showFilePicker = false
+                },
+                onFileSelected = { file ->
+                    if (file.name.endsWith(".tar.gz", ignoreCase = true) || file.name.endsWith(".tar", ignoreCase = true)) {
+                        selectedFile = file
+                        if (rootfsName.isBlank()) {
+                            rootfsName = file.name.substringBeforeLast(".")
+                        }
+                        showFilePicker = false
+                        errorMessage = null // Clear any previous errors
+                    } else {
+                        errorMessage = "Please select a .tar.gz or .tar file"
+                        showFilePicker = false
+                    }
                 }
-            }
-        )
-    } else if (showFilePicker && !checkStoragePermission()) {
-        // Show permission request dialog
-        AlertDialog(
-            onDismissRequest = { showFilePicker = false },
-            title = { Text("Storage Permission Required") },
-            text = {
-                Text("Storage permission is required to pick files from your device. Please grant the permission.")
-            },
-            confirmButton = {
-                Button(onClick = { requestStoragePermission() }) {
-                    Text("Grant Permission")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showFilePicker = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
+            )
+        } else {
+            // Permission not granted, show error and close picker
+            showFilePicker = false
+            errorMessage = "Storage permission is required to pick files"
+            selectedType = null // Reset selection
+        }
     }
     
     // Init script info dialog

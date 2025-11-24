@@ -1514,6 +1514,8 @@ fun AgentScreen(
     val toolCallQueue = remember { mutableListOf<Pair<String, Map<String, Any>>>() }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // Track current agent job for cancellation
+    var currentAgentJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val clipboardManager = LocalClipboardManager.current
     
     // Read Ollama settings from Settings
@@ -1686,6 +1688,12 @@ fun AgentScreen(
                 IconButton(
                     onClick = { 
                         isPaused = !isPaused
+                        // Cancel current job if pausing
+                        if (isPaused) {
+                            android.util.Log.d("AgentScreen", "Session $sessionId paused - cancelling current job")
+                            currentAgentJob?.cancel()
+                            currentAgentJob = null
+                        }
                         // Save pause state immediately
                         val metadata = SessionMetadata(
                             workspaceRoot = workspaceRoot,
@@ -1741,6 +1749,11 @@ fun AgentScreen(
                             text = { Text(if (isPaused) "Resume Session" else "Pause Session") },
                             onClick = {
                                 isPaused = !isPaused
+                                // Cancel current job if pausing
+                                if (isPaused) {
+                                    currentAgentJob?.cancel()
+                                    currentAgentJob = null
+                                }
                                 showSessionMenu = false
                             },
                             leadingIcon = {
@@ -1881,7 +1894,11 @@ fun AgentScreen(
                                     inputText = ""
                                     
                                     // Send to Gemini API with tools
-                                    scope.launch {
+                                    val job = scope.launch {
+                                        // Cancel previous job if any
+                                        currentAgentJob?.cancel()
+                                        currentAgentJob = this
+                                        
                                         android.util.Log.d("AgentScreen", "Starting message send for: ${prompt.take(50)}...")
                                         val loadingMessage = AgentMessage(
                                             text = "Thinking...",
@@ -1897,6 +1914,7 @@ fun AgentScreen(
                                                 (aiClient as OllamaClient).sendMessageStream(
                                                     userMessage = prompt,
                                                     onChunk = { chunk ->
+                                                        if (isPaused) return@sendMessageStream
                                                         currentResponseText += chunk
                                                         val currentMessages = if (messages.isNotEmpty()) messages.dropLast(1) else messages
                                                         messages = currentMessages + AgentMessage(
@@ -1906,6 +1924,7 @@ fun AgentScreen(
                                                         )
                                                     },
                                                     onToolCall = { functionCall ->
+                                                        if (isPaused) return@sendMessageStream
                                                         val toolMessage = AgentMessage(
                                                             text = "🔧 Calling tool: ${functionCall.name}",
                                                             isUser = false,
@@ -1914,6 +1933,7 @@ fun AgentScreen(
                                                         messages = messages + toolMessage
                                                     },
                                                     onToolResult = { toolName, args ->
+                                                        if (isPaused) return@sendMessageStream
                                                         val resultMessage = AgentMessage(
                                                             text = "✅ Tool '$toolName' completed",
                                                             isUser = false,
@@ -1926,6 +1946,7 @@ fun AgentScreen(
                                                 (aiClient as GeminiClient).sendMessageStream(
                                                     userMessage = prompt,
                                                     onChunk = { chunk ->
+                                                        if (isPaused) return@sendMessageStream
                                                         currentResponseText += chunk
                                                         val currentMessages = if (messages.isNotEmpty()) messages.dropLast(1) else messages
                                                         messages = currentMessages + AgentMessage(
@@ -1935,6 +1956,7 @@ fun AgentScreen(
                                                         )
                                                     },
                                                     onToolCall = { functionCall ->
+                                                        if (isPaused) return@sendMessageStream
                                                         val toolMessage = AgentMessage(
                                                             text = "🔧 Calling tool: ${functionCall.name}",
                                                             isUser = false,
@@ -1943,6 +1965,7 @@ fun AgentScreen(
                                                         messages = messages + toolMessage
                                                     },
                                                     onToolResult = { toolName, args ->
+                                                        if (isPaused) return@sendMessageStream
                                                         val resultMessage = AgentMessage(
                                                             text = "✅ Tool '$toolName' completed",
                                                             isUser = false,
@@ -1957,6 +1980,17 @@ fun AgentScreen(
                                             android.util.Log.d("AgentScreen", "Starting to collect stream events")
                                             try {
                                                 stream.collect { event ->
+                                                    // Check if paused - if so, wait until resumed
+                                                    while (isPaused && !this@launch.isCancelled) {
+                                                        kotlinx.coroutines.delay(100)
+                                                    }
+                                                    
+                                                    // Check if cancelled
+                                                    if (this@launch.isCancelled) {
+                                                        android.util.Log.d("AgentScreen", "Stream collection cancelled")
+                                                        return@collect
+                                                    }
+                                                    
                                                     try {
                                                         android.util.Log.d("AgentScreen", "Received stream event: ${event.javaClass.simpleName}")
                                                         when (event) {
@@ -2053,12 +2087,26 @@ fun AgentScreen(
                                                         messages = if (messages.isNotEmpty()) messages.dropLast(1) + errorMessage else messages + errorMessage
                                                     }
                                                 }
+                                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                                android.util.Log.d("AgentScreen", "Stream collection cancelled")
+                                                // Clean up loading message
+                                                if (messages.isNotEmpty() && messages.last().text == "Thinking...") {
+                                                    messages = messages.dropLast(1)
+                                                }
+                                                val pausedMessage = AgentMessage(
+                                                    text = "⏸️ Workflow paused",
+                                                    isUser = false,
+                                                    timestamp = System.currentTimeMillis()
+                                                )
+                                                messages = messages + pausedMessage
+                                                throw e
                                             } catch (e: Exception) {
                                                 android.util.Log.e("AgentScreen", "Error in stream collection", e)
                                                 // Fall through to outer catch block
                                                 throw e
                                             }
                                             android.util.Log.d("AgentScreen", "Finished collecting stream events")
+                                            currentAgentJob = null
                                             // Final safety check: ensure loading message is cleaned up
                                             try {
                                                 if (currentResponseText.isNotEmpty() && messages.isNotEmpty()) {
@@ -2086,6 +2134,12 @@ fun AgentScreen(
                                                 timestamp = System.currentTimeMillis()
                                             )
                                             messages = messages.dropLast(1) + exhaustedMessage
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            android.util.Log.d("AgentScreen", "Message send cancelled")
+                                            // Clean up loading message
+                                            if (messages.isNotEmpty() && messages.last().text == "Thinking...") {
+                                                messages = messages.dropLast(1)
+                                            }
                                         } catch (e: Exception) {
                                             android.util.Log.e("AgentScreen", "Exception caught in message send", e)
                                             android.util.Log.e("AgentScreen", "Exception type: ${e.javaClass.simpleName}")
@@ -2096,8 +2150,11 @@ fun AgentScreen(
                                                 timestamp = System.currentTimeMillis()
                                             )
                                             messages = messages.dropLast(1) + errorMessage
+                                        } finally {
+                                            currentAgentJob = null
                                         }
                                     }
+                                    currentAgentJob = job
                                 }
                             },
                             enabled = inputText.isNotBlank() && !isPaused
@@ -2331,6 +2388,7 @@ fun AgentScreen(
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Bold
                     )
+                    Text("• Cancel any ongoing agent workflow", style = MaterialTheme.typography.bodySmall)
                     Text("• Clear all chat history for this session", style = MaterialTheme.typography.bodySmall)
                     Text("• Reset the conversation", style = MaterialTheme.typography.bodySmall)
                     Text("• Clear client chat history", style = MaterialTheme.typography.bodySmall)
@@ -2345,6 +2403,11 @@ fun AgentScreen(
             confirmButton = {
                 Button(
                     onClick = {
+                        // Cancel any ongoing agent job first
+                        android.util.Log.d("AgentScreen", "Terminating session $sessionId - cancelling agent job")
+                        currentAgentJob?.cancel()
+                        currentAgentJob = null
+                        
                         // Terminate session: clear history and reset
                         scope.launch {
                             // Clear history from persistence
