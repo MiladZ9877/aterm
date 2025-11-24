@@ -1896,8 +1896,8 @@ fun AgentScreen(
                                     val job = scope.launch {
                                         // Cancel previous job if any
                                         currentAgentJob?.cancel()
-                                        // Store this job reference
-                                        currentAgentJob = this@launch.coroutineContext[Job]
+                                        // Store this job reference - use the launch job itself
+                                        currentAgentJob = this.coroutineContext[Job]
                                         
                                         android.util.Log.d("AgentScreen", "Starting message send for: ${prompt.take(50)}...")
                                         val loadingMessage = AgentMessage(
@@ -1993,11 +1993,8 @@ fun AgentScreen(
                                                         }
                                                     }
                                                     
-                                                    // Check if cancelled (only if not paused, to avoid false positives)
-                                                    if (!isPaused && currentJob?.isActive == false) {
-                                                        android.util.Log.d("AgentScreen", "Stream collection cancelled")
-                                                        return@collect
-                                                    }
+                                                    // Removed premature cancellation check - let CancellationException handle proper cancellations
+                                                    // The check was too aggressive and could cancel the stream incorrectly
                                                     
                                                     try {
                                                         android.util.Log.d("AgentScreen", "Received stream event: ${event.javaClass.simpleName}")
