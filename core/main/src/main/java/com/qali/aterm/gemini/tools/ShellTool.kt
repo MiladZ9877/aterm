@@ -165,60 +165,78 @@ class ShellToolInvocation(
                             terminalSession.write("$cdCommand${params.command}\n")
                             
                             // Wait for command to complete and read output
+                            // Use a more efficient approach: wait for prompt to appear
                             var output = ""
                             var attempts = 0
-                            val maxAttempts = 100 // 10 seconds max (100 * 100ms)
+                            val maxAttempts = 200 // 20 seconds max (200 * 100ms)
+                            
+                            // Wait a bit for command to start
+                            delay(200)
                             
                             while (attempts < maxAttempts) {
-                                delay(100) // Wait 100ms between checks
+                                // Check for cancellation first
+                                if (signal?.isAborted() == true) {
+                                    android.util.Log.d("ShellTool", "Command cancelled")
+                                    throw InterruptedException("Command cancelled")
+                                }
                                 
                                 val currentTranscript = terminalSession.emulator?.screen?.getTranscriptText() ?: ""
                                 if (currentTranscript.length > initialLength) {
                                     // Get new output (everything after initial transcript)
-                                    val newOutput = currentTranscript.substring(initialLength).trim()
+                                    val newOutput = currentTranscript.substring(initialLength)
                                     
-                                    // Check if command completed (look for prompt or newline patterns)
-                                    // Commands typically end with a new prompt or return to shell
-                                    if (newOutput.isNotEmpty() && attempts > 5) { // Wait at least 500ms
-                                        // Check if we have a complete output (ends with prompt-like pattern or has enough content)
-                                        val lastLines = newOutput.lines().takeLast(3)
-                                        val mightBeComplete = lastLines.any { 
-                                            it.isEmpty() || it.matches(Regex("^[^\\s]+@[^\\s]+:[^\\s]+[\\$#]\\s*$")) 
-                                        } || attempts >= 20 // Or we've waited 2 seconds
+                                    // Check if we see a prompt (command completed)
+                                    // Look for common prompt patterns or empty line followed by prompt
+                                    val lines = newOutput.lines()
+                                    if (lines.size >= 2) {
+                                        val lastLine = lines.lastOrNull()?.trim() ?: ""
+                                        val secondLastLine = lines.getOrNull(lines.size - 2)?.trim() ?: ""
                                         
-                                        if (mightBeComplete) {
+                                        // Check if last line looks like a prompt (contains $ or # and path-like structure)
+                                        val isPrompt = lastLine.matches(Regex(".*[\\$#]\\s*$")) && 
+                                                      (lastLine.contains("@") || lastLine.contains(":") || lastLine.contains("/"))
+                                        
+                                        // Or if we have output and waited enough
+                                        val hasOutput = newOutput.trim().isNotEmpty() && attempts >= 10
+                                        
+                                        if (isPrompt || (hasOutput && attempts >= 30)) {
                                             output = newOutput
                                             // Remove the command echo and prompt from output
-                                            val lines = output.lines()
                                             val filteredLines = lines.filterIndexed { index, line ->
+                                                val trimmed = line.trim()
                                                 // Skip first line if it's the command itself
-                                                if (index == 0 && (line.contains(params.command) || line.trim().isEmpty())) {
+                                                if (index == 0 && (trimmed.contains(params.command.split(" ").firstOrNull() ?: "") || trimmed.isEmpty())) {
                                                     false
                                                 } else {
                                                     // Skip prompt lines
-                                                    !line.matches(Regex("^[^\\s]+@[^\\s]+:[^\\s]+[\\$#]\\s*$"))
+                                                    !trimmed.matches(Regex(".*[\\$#]\\s*$")) || !trimmed.contains("@")
                                                 }
                                             }
                                             output = filteredLines.joinToString("\n").trim()
                                             break
                                         }
+                                    } else if (newOutput.trim().isNotEmpty() && attempts >= 30) {
+                                        // If we have some output and waited 3 seconds, use it
+                                        output = newOutput.trim()
+                                        break
                                     }
                                 }
                                 
                                 attempts++
-                                
-                                // Check for cancellation
-                                if (signal?.isAborted() == true) {
-                                    android.util.Log.d("ShellTool", "Command cancelled")
-                                    throw InterruptedException("Command cancelled")
-                                }
+                                delay(100) // Wait 100ms between checks
                             }
                             
                             if (output.isEmpty() && attempts >= maxAttempts) {
                                 android.util.Log.w("ShellTool", "Command output timeout, using transcript")
                                 val fullTranscript = terminalSession.emulator?.screen?.getTranscriptText() ?: ""
                                 if (fullTranscript.length > initialLength) {
-                                    output = fullTranscript.substring(initialLength).trim()
+                                    val rawOutput = fullTranscript.substring(initialLength)
+                                    val lines = rawOutput.lines()
+                                    val filteredLines = lines.filterIndexed { index, line ->
+                                        val trimmed = line.trim()
+                                        !trimmed.matches(Regex(".*[\\$#]\\s*$")) || !trimmed.contains("@")
+                                    }
+                                    output = filteredLines.joinToString("\n").trim()
                                 }
                             }
                             

@@ -688,8 +688,32 @@ fun TerminalScreen(
                                                         mainActivityActivity, workingMode = Settings.working_Mode
                                                     )
                                                 // Get the session for the current tab
-                                                mainActivityActivity.sessionBinder!!.getSession(sessionIdForTab)
-                                                    ?: mainActivityActivity.sessionBinder!!.getSession(mainSessionId)
+                                                // Ensure agent session exists - createSessionWithHidden should have created it, but double-check
+                                                var tabSession = mainActivityActivity.sessionBinder!!.getSession(sessionIdForTab)
+                                                if (tabSession == null && sessionIdForTab.endsWith("_agent")) {
+                                                    // Agent session doesn't exist, create it
+                                                    val agentClient = object : TerminalSessionClient {
+                                                        override fun onTextChanged(changedSession: TerminalSession) {}
+                                                        override fun onTitleChanged(changedSession: TerminalSession) {}
+                                                        override fun onSessionFinished(finishedSession: TerminalSession) {}
+                                                        override fun onCopyTextToClipboard(session: TerminalSession, text: String) {}
+                                                        override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+                                                        override fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
+                                                        override fun onBell(session: TerminalSession) {}
+                                                        override fun onColorsChanged(session: TerminalSession) {}
+                                                        override fun onTerminalCursorStateChange(state: Boolean) {}
+                                                        override fun getTerminalCursorStyle(): Int = com.termux.terminal.TerminalEmulator.DEFAULT_TERMINAL_CURSOR_STYLE
+                                                        override fun logError(tag: String?, message: String?) {}
+                                                        override fun logWarn(tag: String?, message: String?) {}
+                                                        override fun logInfo(tag: String?, message: String?) {}
+                                                        override fun logDebug(tag: String?, message: String?) {}
+                                                        override fun logVerbose(tag: String?, message: String?) {}
+                                                        override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) {}
+                                                        override fun logStackTrace(tag: String?, e: Exception?) {}
+                                                    }
+                                                    tabSession = mainActivityActivity.sessionBinder!!.createSession(sessionIdForTab, agentClient, mainActivityActivity, Settings.working_Mode)
+                                                }
+                                                tabSession ?: mainActivityActivity.sessionBinder!!.getSession(mainSessionId)
                                             } else {
                                                 // Ensure main session exists
                                                 val mainSession = mainActivityActivity.sessionBinder!!.getSession(mainSessionId)
@@ -699,8 +723,32 @@ fun TerminalScreen(
                                                         mainActivityActivity,workingMode = Settings.working_Mode
                                                     )
                                                 // Get the session for the current tab
-                                                mainActivityActivity.sessionBinder!!.getSession(sessionIdForTab)
-                                                    ?: mainSession
+                                                // Ensure agent session exists if needed
+                                                var tabSession = mainActivityActivity.sessionBinder!!.getSession(sessionIdForTab)
+                                                if (tabSession == null && sessionIdForTab.endsWith("_agent")) {
+                                                    // Agent session doesn't exist, create it
+                                                    val agentClient = object : TerminalSessionClient {
+                                                        override fun onTextChanged(changedSession: TerminalSession) {}
+                                                        override fun onTitleChanged(changedSession: TerminalSession) {}
+                                                        override fun onSessionFinished(finishedSession: TerminalSession) {}
+                                                        override fun onCopyTextToClipboard(session: TerminalSession, text: String) {}
+                                                        override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+                                                        override fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
+                                                        override fun onBell(session: TerminalSession) {}
+                                                        override fun onColorsChanged(session: TerminalSession) {}
+                                                        override fun onTerminalCursorStateChange(state: Boolean) {}
+                                                        override fun getTerminalCursorStyle(): Int = com.termux.terminal.TerminalEmulator.DEFAULT_TERMINAL_CURSOR_STYLE
+                                                        override fun logError(tag: String?, message: String?) {}
+                                                        override fun logWarn(tag: String?, message: String?) {}
+                                                        override fun logInfo(tag: String?, message: String?) {}
+                                                        override fun logDebug(tag: String?, message: String?) {}
+                                                        override fun logVerbose(tag: String?, message: String?) {}
+                                                        override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) {}
+                                                        override fun logStackTrace(tag: String?, e: Exception?) {}
+                                                    }
+                                                    tabSession = mainActivityActivity.sessionBinder!!.createSession(sessionIdForTab, agentClient, mainActivityActivity, Settings.working_Mode)
+                                                }
+                                                tabSession ?: mainSession
                                             }
 
                                             session?.updateTerminalSessionClient(client)
@@ -947,13 +995,39 @@ fun SelectableCard(
 fun changeSession(mainActivityActivity: MainActivity, session_id: String) {
     terminalView.get()?.apply {
         val client = TerminalBackEnd(this, mainActivityActivity)
-        val session =
-            mainActivityActivity.sessionBinder!!.getSession(session_id)
-                ?: mainActivityActivity.sessionBinder!!.createSessionWithHidden(
-                    session_id,
-                    client,
-                    mainActivityActivity,workingMode = Settings.working_Mode
-                )
+        // Always use createSessionWithHidden to ensure agent session is created
+        val session = mainActivityActivity.sessionBinder!!.getSession(session_id)
+            ?: mainActivityActivity.sessionBinder!!.createSessionWithHidden(
+                session_id,
+                client,
+                mainActivityActivity,workingMode = Settings.working_Mode
+            )
+        
+        // Ensure agent session exists even if main session already existed
+        val agentSessionId = "${session_id}_agent"
+        if (mainActivityActivity.sessionBinder!!.getSession(agentSessionId) == null) {
+            val agentClient = object : TerminalSessionClient {
+                override fun onTextChanged(changedSession: TerminalSession) {}
+                override fun onTitleChanged(changedSession: TerminalSession) {}
+                override fun onSessionFinished(finishedSession: TerminalSession) {}
+                override fun onCopyTextToClipboard(session: TerminalSession, text: String) {}
+                override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+                override fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
+                override fun onBell(session: TerminalSession) {}
+                override fun onColorsChanged(session: TerminalSession) {}
+                override fun onTerminalCursorStateChange(state: Boolean) {}
+                override fun getTerminalCursorStyle(): Int = com.termux.terminal.TerminalEmulator.DEFAULT_TERMINAL_CURSOR_STYLE
+                override fun logError(tag: String?, message: String?) {}
+                override fun logWarn(tag: String?, message: String?) {}
+                override fun logInfo(tag: String?, message: String?) {}
+                override fun logDebug(tag: String?, message: String?) {}
+                override fun logVerbose(tag: String?, message: String?) {}
+                override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) {}
+                override fun logStackTrace(tag: String?, e: Exception?) {}
+            }
+            mainActivityActivity.sessionBinder!!.createSession(agentSessionId, agentClient, mainActivityActivity, Settings.working_Mode)
+        }
+        
         session.updateTerminalSessionClient(client)
         attachSession(session)
         setTerminalViewClient(client)

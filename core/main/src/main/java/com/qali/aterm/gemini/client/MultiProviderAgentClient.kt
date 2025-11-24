@@ -1101,7 +1101,7 @@ class GeminiClient(
         return finishReason
     }
     
-    private fun executeToolSync(name: String, args: Map<String, Any>): ToolResult {
+    private suspend fun executeToolSync(name: String, args: Map<String, Any>): ToolResult {
         val tool = toolRegistry.getTool(name)
             ?: return ToolResult(
                 llmContent = "Tool not found: $name",
@@ -1127,13 +1127,12 @@ class GeminiClient(
             val invocation = (tool as DeclarativeTool<Any, ToolResult>).createInvocation(params as Any)
             
             // Execute tool with proper coroutine context
-            // Use a new coroutine scope with Default dispatcher to avoid blocking IO dispatcher
-            // This prevents deadlocks when called from within withContext(Dispatchers.IO)
-            kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.Default) {
+            // Use IO dispatcher for tool execution to avoid blocking main thread
+            withContext(Dispatchers.IO) {
                 try {
                     invocation.execute(null, null)
                 } catch (e: Exception) {
-                    android.util.Log.e("GeminiClient", "Error executing tool $name in runBlocking", e)
+                    android.util.Log.e("GeminiClient", "Error executing tool $name", e)
                     throw e
                 }
             }
