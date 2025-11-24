@@ -5,6 +5,7 @@ import com.qali.aterm.gemini.client.GeminiClient
 import com.qali.aterm.gemini.client.GeminiStreamEvent
 import com.qali.aterm.gemini.client.OllamaClient
 import com.qali.aterm.gemini.tools.*
+import com.qali.aterm.ui.activities.terminal.MainActivity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
@@ -17,7 +18,7 @@ object GeminiService {
     private var useOllama: Boolean = false
     private var currentWorkspaceRoot: String = alpineDir().absolutePath
     
-    fun initialize(workspaceRoot: String = alpineDir().absolutePath, useOllama: Boolean = false, ollamaUrl: String = "http://localhost:11434", ollamaModel: String = "llama3.2"): Any {
+    fun initialize(workspaceRoot: String = alpineDir().absolutePath, useOllama: Boolean = false, ollamaUrl: String = "http://localhost:11434", ollamaModel: String = "llama3.2", sessionId: String? = null, mainActivity: MainActivity? = null): Any {
         val workspaceChanged = currentWorkspaceRoot != workspaceRoot
         val useOllamaChanged = this.useOllama != useOllama
         
@@ -28,7 +29,7 @@ object GeminiService {
             // Recreate client if workspace changed, useOllama changed, or client doesn't exist
             if (ollamaClient == null || workspaceChanged || useOllamaChanged) {
                 val toolRegistry = ToolRegistry()
-                registerAllTools(toolRegistry, workspaceRoot)
+                registerAllTools(toolRegistry, workspaceRoot, sessionId, mainActivity)
                 
                 // For Ollama, we need a GeminiClient for custom search (it uses Gemini API for AI analysis)
                 // Create a temporary client just for custom search tool
@@ -42,7 +43,7 @@ object GeminiService {
             // Recreate client if workspace changed, useOllama changed, or client doesn't exist
             if (client == null || workspaceChanged || useOllamaChanged) {
                 val toolRegistry = ToolRegistry()
-                registerAllTools(toolRegistry, workspaceRoot)
+                registerAllTools(toolRegistry, workspaceRoot, sessionId, mainActivity)
                 
                 val newClient = GeminiClient(toolRegistry, workspaceRoot)
                 client = newClient
@@ -57,12 +58,12 @@ object GeminiService {
         }
     }
     
-    private fun registerAllTools(toolRegistry: ToolRegistry, workspaceRoot: String) {
+    private fun registerAllTools(toolRegistry: ToolRegistry, workspaceRoot: String, sessionId: String? = null, mainActivity: MainActivity? = null) {
         toolRegistry.registerTool(ReadFileTool(workspaceRoot))
         toolRegistry.registerTool(WriteFileTool(workspaceRoot))
         toolRegistry.registerTool(EditTool(workspaceRoot))
         toolRegistry.registerTool(SmartEditTool(workspaceRoot))
-        toolRegistry.registerTool(ShellTool(workspaceRoot))
+        toolRegistry.registerTool(ShellTool(workspaceRoot, sessionId, mainActivity))
         toolRegistry.registerTool(LSTool(workspaceRoot))
         toolRegistry.registerTool(GrepTool(workspaceRoot))
         toolRegistry.registerTool(RipGrepTool(workspaceRoot))

@@ -1525,7 +1525,7 @@ fun AgentScreen(
     
     // Initialize client - use sessionId in key to ensure per-session clients
     val aiClient = remember(sessionId, workspaceRoot, useOllama, ollamaHost, ollamaPort, ollamaModel) {
-        GeminiService.initialize(workspaceRoot, useOllama, ollamaUrl, ollamaModel)
+        GeminiService.initialize(workspaceRoot, useOllama, ollamaUrl, ollamaModel, sessionId, mainActivity)
     }
     
     // Load history on init for this session and restore to client

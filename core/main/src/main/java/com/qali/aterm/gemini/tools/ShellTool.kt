@@ -4,6 +4,9 @@ import com.rk.libcommons.alpineDir
 import com.qali.aterm.gemini.core.FunctionDeclaration
 import com.qali.aterm.gemini.core.FunctionParameters
 import com.qali.aterm.gemini.core.PropertySchema
+import com.qali.aterm.ui.activities.terminal.MainActivity
+import com.qali.aterm.service.TabType
+import com.termux.terminal.TerminalSession
 import java.io.File
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
@@ -16,7 +19,9 @@ data class ShellToolParams(
 
 class ShellToolInvocation(
     toolParams: ShellToolParams,
-    private val workspaceRoot: String = alpineDir().absolutePath
+    private val workspaceRoot: String = alpineDir().absolutePath,
+    private val sessionId: String? = null,
+    private val mainActivity: MainActivity? = null
 ) : ToolInvocation<ShellToolParams, ToolResult> {
     
     override val params: ShellToolParams = toolParams
@@ -134,67 +139,159 @@ class ShellToolInvocation(
                         android.util.Log.d("ShellTool", "Executing command: ${params.command}")
                         android.util.Log.d("ShellTool", "Working directory: ${finalWorkingDir.absolutePath}")
                         
-                        // Build process with environment
-                        val processBuilder = ProcessBuilder()
-                            .command("sh", "-c", params.command)
-                            .directory(finalWorkingDir)
-                            .redirectErrorStream(true)
+                        // Try to use terminal session if available
+                        val agentSessionId = sessionId?.let { "${it}_agent" }
+                        val terminalSession: TerminalSession? = if (agentSessionId != null && mainActivity != null && mainActivity.sessionBinder != null) {
+                            mainActivity.sessionBinder!!.getSession(agentSessionId)
+                        } else {
+                            null
+                        }
                         
-                        // Set up environment variables matching rootfs/terminal session environment
-                        val env = processBuilder.environment()
-                        // Use comprehensive PATH that includes rootfs paths and common Node.js/npm locations
-                        val rootfsPath = "/bin:/sbin:/usr/bin:/usr/sbin:/usr/share/bin:/usr/share/sbin:/usr/local/bin:/usr/local/sbin"
-                        // Add common Node.js/npm installation paths
-                        val nodePaths = "/usr/local/lib/node_modules/npm/bin:/usr/local/bin/node:/usr/bin/node:/opt/node/bin"
-                        val systemPath = "/system/bin:/system/xbin"
-                        // Prioritize rootfs paths, then node paths, then system paths
-                        env["PATH"] = "$rootfsPath:$nodePaths:$systemPath:${env["PATH"] ?: ""}"
-                        env["HOME"] = env["HOME"] ?: "/root"
-                        env["SHELL"] = "/bin/sh"
-                        env["TERM"] = "xterm-256color"
-                        env["COLORTERM"] = "truecolor"
-                        env["LANG"] = "C.UTF-8"
-                        // Add workspace root to environment for scripts that need it
-                        env["WORKSPACE_ROOT"] = workspaceRoot
-                        env["PWD"] = finalWorkingDir.absolutePath
-                        
-                        val process = processBuilder.start()
-                        android.util.Log.d("ShellTool", "Process started successfully")
-                        
-                        // Read output - since redirectErrorStream(true), both stdout and stderr go to inputStream
-                        val output = StringBuilder()
-                        val reader = process.inputStream.bufferedReader()
-                        
-                        // Read all lines from the combined stream
-                        var line: String?
-                        while (reader.readLine().also { line = it } != null) {
-                            output.appendLine(line)
-                            // Check for cancellation
-                            if (signal?.isAborted() == true) {
-                                process.destroyForcibly()
-                                throw InterruptedException("Command cancelled")
+                        if (terminalSession != null) {
+                            // Use terminal session for command execution
+                            android.util.Log.d("ShellTool", "Using terminal session: $agentSessionId")
+                            
+                            // Change to working directory if needed
+                            val cdCommand = if (finalWorkingDir.absolutePath != workspaceRoot) {
+                                "cd '${finalWorkingDir.absolutePath}' && "
+                            } else {
+                                ""
                             }
+                            
+                            // Get initial transcript length
+                            val initialLength = terminalSession.emulator?.screen?.getTranscriptText()?.length ?: 0
+                            
+                            // Write command to terminal (add newline to execute)
+                            terminalSession.write("$cdCommand${params.command}\n")
+                            
+                            // Wait for command to complete and read output
+                            var output = ""
+                            var attempts = 0
+                            val maxAttempts = 100 // 10 seconds max (100 * 100ms)
+                            
+                            while (attempts < maxAttempts) {
+                                delay(100) // Wait 100ms between checks
+                                
+                                val currentTranscript = terminalSession.emulator?.screen?.getTranscriptText() ?: ""
+                                if (currentTranscript.length > initialLength) {
+                                    // Get new output (everything after initial transcript)
+                                    val newOutput = currentTranscript.substring(initialLength).trim()
+                                    
+                                    // Check if command completed (look for prompt or newline patterns)
+                                    // Commands typically end with a new prompt or return to shell
+                                    if (newOutput.isNotEmpty() && attempts > 5) { // Wait at least 500ms
+                                        // Check if we have a complete output (ends with prompt-like pattern or has enough content)
+                                        val lastLines = newOutput.lines().takeLast(3)
+                                        val mightBeComplete = lastLines.any { 
+                                            it.isEmpty() || it.matches(Regex("^[^\\s]+@[^\\s]+:[^\\s]+[\\$#]\\s*$")) 
+                                        } || attempts >= 20 // Or we've waited 2 seconds
+                                        
+                                        if (mightBeComplete) {
+                                            output = newOutput
+                                            // Remove the command echo and prompt from output
+                                            val lines = output.lines()
+                                            val filteredLines = lines.filterIndexed { index, line ->
+                                                // Skip first line if it's the command itself
+                                                if (index == 0 && (line.contains(params.command) || line.trim().isEmpty())) {
+                                                    false
+                                                } else {
+                                                    // Skip prompt lines
+                                                    !line.matches(Regex("^[^\\s]+@[^\\s]+:[^\\s]+[\\$#]\\s*$"))
+                                                }
+                                            }
+                                            output = filteredLines.joinToString("\n").trim()
+                                            break
+                                        }
+                                    }
+                                }
+                                
+                                attempts++
+                                
+                                // Check for cancellation
+                                if (signal?.isAborted() == true) {
+                                    android.util.Log.d("ShellTool", "Command cancelled")
+                                    throw InterruptedException("Command cancelled")
+                                }
+                            }
+                            
+                            if (output.isEmpty() && attempts >= maxAttempts) {
+                                android.util.Log.w("ShellTool", "Command output timeout, using transcript")
+                                val fullTranscript = terminalSession.emulator?.screen?.getTranscriptText() ?: ""
+                                if (fullTranscript.length > initialLength) {
+                                    output = fullTranscript.substring(initialLength).trim()
+                                }
+                            }
+                            
+                            android.util.Log.d("ShellTool", "Command completed via terminal session")
+                            android.util.Log.d("ShellTool", "Output length: ${output.length} characters")
+                            
+                            Pair(0, output) // Terminal session commands typically return 0, actual exit code would need parsing
+                        } else {
+                            // Fallback to ProcessBuilder if terminal session not available
+                            android.util.Log.d("ShellTool", "Terminal session not available, using ProcessBuilder")
+                            
+                            // Build process with environment
+                            val processBuilder = ProcessBuilder()
+                                .command("sh", "-c", params.command)
+                                .directory(finalWorkingDir)
+                                .redirectErrorStream(true)
+                        
+                            // Set up environment variables matching rootfs/terminal session environment
+                            val env = processBuilder.environment()
+                            // Use comprehensive PATH that includes rootfs paths and common Node.js/npm locations
+                            val rootfsPath = "/bin:/sbin:/usr/bin:/usr/sbin:/usr/share/bin:/usr/share/sbin:/usr/local/bin:/usr/local/sbin"
+                            // Add common Node.js/npm installation paths
+                            val nodePaths = "/usr/local/lib/node_modules/npm/bin:/usr/local/bin/node:/usr/bin/node:/opt/node/bin"
+                            val systemPath = "/system/bin:/system/xbin"
+                            // Prioritize rootfs paths, then node paths, then system paths
+                            env["PATH"] = "$rootfsPath:$nodePaths:$systemPath:${env["PATH"] ?: ""}"
+                            env["HOME"] = env["HOME"] ?: "/root"
+                            env["SHELL"] = "/bin/sh"
+                            env["TERM"] = "xterm-256color"
+                            env["COLORTERM"] = "truecolor"
+                            env["LANG"] = "C.UTF-8"
+                            // Add workspace root to environment for scripts that need it
+                            env["WORKSPACE_ROOT"] = workspaceRoot
+                            env["PWD"] = finalWorkingDir.absolutePath
+                            
+                            val process = processBuilder.start()
+                            android.util.Log.d("ShellTool", "Process started successfully")
+                            
+                            // Read output - since redirectErrorStream(true), both stdout and stderr go to inputStream
+                            val output = StringBuilder()
+                            val reader = process.inputStream.bufferedReader()
+                            
+                            // Read all lines from the combined stream
+                            var line: String?
+                            while (reader.readLine().also { line = it } != null) {
+                                output.appendLine(line)
+                                // Check for cancellation
+                                if (signal?.isAborted() == true) {
+                                    process.destroyForcibly()
+                                    throw InterruptedException("Command cancelled")
+                                }
+                            }
+                            
+                            // Wait for process to complete (with timeout check)
+                            val exitCode = process.waitFor()
+                            val finalOutput = output.toString().trim()
+                            
+                            // Close streams
+                            reader.close()
+                            process.inputStream.close()
+                            process.outputStream.close()
+                            process.errorStream.close()
+                            
+                            // Clean up process
+                            if (process.isAlive) {
+                                process.destroy()
+                            }
+                            
+                            android.util.Log.d("ShellTool", "Command completed with exit code: $exitCode")
+                            android.util.Log.d("ShellTool", "Output length: ${finalOutput.length} characters")
+                            
+                            Pair(exitCode, finalOutput)
                         }
-                        
-                        // Wait for process to complete (with timeout check)
-                        val exitCode = process.waitFor()
-                        val finalOutput = output.toString().trim()
-                        
-                        // Close streams
-                        reader.close()
-                        process.inputStream.close()
-                        process.outputStream.close()
-                        process.errorStream.close()
-                        
-                        // Clean up process
-                        if (process.isAlive) {
-                            process.destroy()
-                        }
-                        
-                        android.util.Log.d("ShellTool", "Command completed with exit code: $exitCode")
-                        android.util.Log.d("ShellTool", "Output length: ${finalOutput.length} characters")
-                        
-                        Pair(exitCode, finalOutput)
                     } catch (e: Exception) {
                         android.util.Log.e("ShellTool", "Error executing shell command: ${params.command}", e)
                         throw e
@@ -262,7 +359,9 @@ class ShellToolInvocation(
 }
 
 class ShellTool(
-    private val workspaceRoot: String = alpineDir().absolutePath
+    private val workspaceRoot: String = alpineDir().absolutePath,
+    private val sessionId: String? = null,
+    private val mainActivity: MainActivity? = null
 ) : DeclarativeTool<ShellToolParams, ToolResult>() {
     
     override val name = "shell"
@@ -301,7 +400,7 @@ class ShellTool(
         toolName: String?,
         toolDisplayName: String?
     ): ToolInvocation<ShellToolParams, ToolResult> {
-        return ShellToolInvocation(params, workspaceRoot)
+        return ShellToolInvocation(params, workspaceRoot, sessionId, mainActivity)
     }
     
     override fun validateAndConvertParams(params: Map<String, Any>): ShellToolParams {
