@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.qali.aterm.api.ApiProviderManager
 import com.qali.aterm.api.ApiProviderManager.KeysExhaustedException
+import com.qali.aterm.api.ApiProviderType
+import com.qali.aterm.autogent.AutoAgentLogger
 import com.qali.aterm.gemini.GeminiService
 import com.qali.aterm.gemini.HistoryPersistenceService
 import com.qali.aterm.gemini.SessionMetadata
@@ -1030,6 +1032,7 @@ fun DebugDialog(
     var isLoadingLogs by remember { mutableStateOf(false) }
     var systemInfo by remember { mutableStateOf<String?>(null) }
     var testInfo by remember { mutableStateOf<String?>(null) }
+    var autoAgentDebugInfo by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     
     // Load all debug information when dialog opens
@@ -1202,9 +1205,22 @@ fun DebugDialog(
             
             isLoadingLogs = false
         }
+        
+        // Load AutoAgent debug info if AutoAgent is selected
+        if (ApiProviderManager.selectedProvider == ApiProviderType.AUTOAGENT) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    autoAgentDebugInfo = AutoAgentLogger.getDebugInfo()
+                } catch (e: Exception) {
+                    autoAgentDebugInfo = "Error loading AutoAgent debug info: ${e.message}"
+                }
+            }
+        } else {
+            autoAgentDebugInfo = null
+        }
     }
     
-    val debugInfo = remember(useOllama, ollamaHost, ollamaPort, ollamaModel, ollamaUrl, workspaceRoot, messages, logcatLogs, systemInfo, testInfo) {
+    val debugInfo = remember(useOllama, ollamaHost, ollamaPort, ollamaModel, ollamaUrl, workspaceRoot, messages, logcatLogs, systemInfo, testInfo, autoAgentDebugInfo, ApiProviderManager.selectedProvider) {
         buildString {
             appendLine("=== Agent Debug Information ===")
             appendLine()
@@ -1256,6 +1272,13 @@ fun DebugDialog(
             // Logcat
             appendLine("--- Recent Logcat (filtered) ---")
             appendLine(logcatLogs ?: "Loading...")
+            appendLine()
+            
+            // AutoAgent Debug Information (if AutoAgent is selected)
+            if (ApiProviderManager.selectedProvider == ApiProviderType.AUTOAGENT) {
+                appendLine("--- AutoAgent Debug Information ---")
+                appendLine(autoAgentDebugInfo ?: "Loading AutoAgent debug info...")
+            }
         }
     }
     

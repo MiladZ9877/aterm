@@ -285,5 +285,12 @@ private fun getSuggestedModels(providerType: ApiProviderType): List<ModelSuggest
             )
         )
         ApiProviderType.CUSTOM -> emptyList()
+        ApiProviderType.AUTOAGENT -> listOf(
+            ModelSuggestion(
+                name = "Offline Learned",
+                value = "offline-learned",
+                description = "Uses only offline learned knowledge from successful code generations."
+            )
+        )
     }
 }

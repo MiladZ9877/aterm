@@ -10,7 +10,8 @@ enum class ApiProviderType(val displayName: String) {
     GOOGLE("Google Gemini"),
     COHERE("Cohere"),
     MISTRAL("Mistral AI"),
-    CUSTOM("Custom")
+    CUSTOM("Custom"),
+    AUTOAGENT("AutoAgent")
 }
 
 data class ApiKey(
@@ -98,6 +99,7 @@ object ApiProviderManager {
             ApiProviderType.COHERE -> "command-r-plus"
             ApiProviderType.MISTRAL -> "mistral-large-latest"
             ApiProviderType.CUSTOM -> ""
+            ApiProviderType.AUTOAGENT -> "offline-learned"
         }
     }
     

@@ -5,6 +5,8 @@ import com.qali.aterm.gemini.core.FunctionDeclaration
 import com.qali.aterm.gemini.core.FunctionParameters
 import com.qali.aterm.gemini.core.PropertySchema
 import com.qali.aterm.gemini.utils.AutoErrorDetection
+import com.qali.aterm.autogent.AutoAgentLearningService
+import com.qali.aterm.autogent.LearnedDataSource
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -75,6 +77,26 @@ class WriteFileToolInvocation(
             } else {
                 baseMessage
             }
+            
+            // Learn from successful file write
+            // Extract keywords from content for metadata relevance
+            val keywords = params.content.lowercase()
+                .split(Regex("[^a-zA-Z0-9]+"))
+                .filter { it.length > 3 }
+                .distinct()
+                .take(10)
+            
+            AutoAgentLearningService.learnFromCodeGeneration(
+                code = params.content,
+                context = "File: ${params.file_path}",
+                source = LearnedDataSource.NORMAL_FLOW,
+                metadata = mapOf(
+                    "file_path" to params.file_path,
+                    "tool" to "write_file",
+                    "keywords" to keywords.joinToString(",")
+                ),
+                userPrompt = params.content.take(200) // Use content snippet as prompt context
+            )
             
             ToolResult(
                 llmContent = messageWithErrors,

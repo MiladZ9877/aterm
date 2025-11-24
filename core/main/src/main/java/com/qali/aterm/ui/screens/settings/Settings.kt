@@ -221,6 +221,9 @@ fun Settings(modifier: Modifier = Modifier,navController: NavController,mainActi
         // Agent Settings
         AgentSettings()
         
+        // Classification Model Settings (for AutoAgent)
+        ClassificationModelSettings()
+        
         // Rootfs Settings
         RootfsSettings(mainActivity = mainActivity, navController = navController)
     }

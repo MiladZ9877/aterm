@@ -9,6 +9,9 @@ import com.qali.aterm.gemini.utils.createPatch
 import com.qali.aterm.gemini.utils.getDiffStat
 import com.qali.aterm.gemini.utils.FileCoherenceManager
 import com.qali.aterm.gemini.utils.AutoErrorDetection
+import com.qali.aterm.autogent.AutoAgentLearningService
+import com.qali.aterm.autogent.LearnedDataSource
+import com.qali.aterm.autogent.EnhancedLearningService
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -245,6 +248,94 @@ class EditToolInvocation(
                 "$successMessage User modified the new_string content."
             } else {
                 successMessage
+            }
+            
+            // Helper function to extract keywords from code
+            fun extractKeywordsFromCode(code: String): List<String> {
+                return code.lowercase()
+                    .split(Regex("[^a-zA-Z0-9]+"))
+                    .filter { it.length > 3 }
+                    .distinct()
+                    .take(10)
+            }
+            
+            // Extract reason from AI proposed content if available
+            val reason = extractReasonFromAIProposal(params.ai_proposed_content) 
+                ?: "Edit applied successfully"
+            
+            // Learn from successful edit/fix (debug feedback)
+            if (!isNewFile && params.old_string.isNotEmpty()) {
+                // Extract keywords from old and new code for better retrieval
+                val keywords = extractKeywordsFromCode(params.old_string + " " + params.new_string)
+                
+                // Use enhanced learning service for AI response with reason
+                EnhancedLearningService.learnFromAIResponseWithReason(
+                    userPrompt = params.ai_proposed_content ?: "Edit file",
+                    oldCode = params.old_string,
+                    newCode = params.new_string,
+                    reason = reason,
+                    metadata = mapOf(
+                        "file_path" to params.file_path,
+                        "tool" to "edit_file",
+                        "keywords" to keywords.joinToString(",")
+                    )
+                )
+                
+                // Also keep legacy learning
+                AutoAgentLearningService.learnFromFix(
+                    oldCode = params.old_string,
+                    newCode = params.new_string,
+                    reason = reason,
+                    source = LearnedDataSource.DEBUG_FEEDBACK,
+                    userPrompt = params.ai_proposed_content,
+                    keywords = keywords
+                )
+            } else if (isNewFile) {
+                // Learn from new file creation with enhanced learning
+                EnhancedLearningService.learnFromCompleteGeneration(
+                    userPrompt = params.ai_proposed_content ?: "Create new file",
+                    generatedCode = newContent,
+                    metadata = mapOf(
+                        "file_path" to params.file_path,
+                        "tool" to "edit_file",
+                        "is_new_file" to "true"
+                    ),
+                    source = LearnedDataSource.NORMAL_FLOW
+                )
+                
+                // Also keep legacy learning
+                AutoAgentLearningService.learnFromCodeGeneration(
+                    code = newContent,
+                    context = "File: ${params.file_path}",
+                    source = LearnedDataSource.NORMAL_FLOW,
+                    metadata = mapOf(
+                        "file_path" to params.file_path,
+                        "tool" to "edit_file",
+                        "is_new_file" to "true"
+                    ),
+                    userPrompt = params.ai_proposed_content
+                )
+            }
+            
+            // Helper to extract reason from AI proposal
+            fun extractReasonFromAIProposal(proposal: String?): String? {
+                if (proposal == null) return null
+                
+                // Look for reason patterns in AI response
+                val reasonPatterns = listOf(
+                    Regex("reason[:\"']\\s*([^\\n\"]+)", RegexOption.IGNORE_CASE),
+                    Regex("why[:\"']\\s*([^\\n\"]+)", RegexOption.IGNORE_CASE),
+                    Regex("because[:\"']?\\s*([^\\n\"]+)", RegexOption.IGNORE_CASE),
+                    Regex("explanation[:\"']\\s*([^\\n\"]+)", RegexOption.IGNORE_CASE)
+                )
+                
+                reasonPatterns.forEach { pattern ->
+                    pattern.find(proposal)?.let {
+                        return it.groupValues[1].trim()
+                    }
+                }
+                
+                return null
             }
             
             // Automatically detect errors after file modification

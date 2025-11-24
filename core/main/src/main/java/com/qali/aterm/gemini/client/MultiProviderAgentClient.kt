@@ -5,6 +5,10 @@ import com.rk.settings.Settings
 import com.qali.aterm.api.ApiProviderManager
 import com.qali.aterm.api.ApiProviderManager.KeysExhaustedException
 import com.qali.aterm.api.ApiProviderType
+import com.qali.aterm.autogent.AutoAgentProvider
+import com.qali.aterm.autogent.AutoAgentLearningService
+import com.qali.aterm.autogent.LearnedDataSource
+import com.qali.aterm.autogent.EnhancedLearningService
 import com.qali.aterm.gemini.tools.DeclarativeTool
 import com.qali.aterm.gemini.core.*
 import com.qali.aterm.gemini.tools.*
@@ -62,6 +66,13 @@ class GeminiClient(
         android.util.Log.d("GeminiClient", "sendMessageStream: Starting request")
         android.util.Log.d("GeminiClient", "sendMessageStream: User message length: ${userMessage.length}")
         
+        // Check if AutoAgent is selected
+        if (ApiProviderManager.selectedProvider == ApiProviderType.AUTOAGENT) {
+            android.util.Log.d("GeminiClient", "sendMessageStream: Using AutoAgent provider")
+            emitAll(AutoAgentProvider.generateResponse(userMessage, onChunk, onToolCall, onToolResult))
+            return@flow
+        }
+        
         // Detect intent: create new project vs debug/upgrade existing
         val intent = detectIntent(userMessage)
         android.util.Log.d("GeminiClient", "sendMessageStream: Detected intent: $intent")
@@ -69,26 +80,39 @@ class GeminiClient(
         // Add first prompt to clarify and expand user intention
         val enhancedUserMessage = enhanceUserIntent(userMessage, intent)
         
+        // Track accumulated content for learning
+        var accumulatedContent = StringBuilder()
+        val learningOnChunk: (String) -> Unit = { chunk ->
+            accumulatedContent.append(chunk)
+            onChunk(chunk)
+            // Learn from streaming chunks
+            AutoAgentLearningService.learnFromStreamingChunk(
+                chunk = chunk,
+                accumulatedContent = accumulatedContent.toString(),
+                source = if (intent == IntentType.DEBUG_UPGRADE) LearnedDataSource.REVERSE_FLOW else LearnedDataSource.NORMAL_FLOW
+            )
+        }
+        
         // Check if streaming is enabled
         if (!Settings.enable_streaming) {
             android.util.Log.d("GeminiClient", "sendMessageStream: Streaming disabled, using non-streaming mode")
             
             when (intent) {
                 IntentType.TEST_ONLY -> {
-                    emitAll(sendMessageTestOnly(enhancedUserMessage, onChunk, onToolCall, onToolResult))
+                    emitAll(sendMessageTestOnly(enhancedUserMessage, learningOnChunk, onToolCall, onToolResult))
                 }
                 IntentType.DEBUG_UPGRADE -> {
-                    emitAll(sendMessageNonStreamingReverse(enhancedUserMessage, onChunk, onToolCall, onToolResult))
+                    emitAll(sendMessageNonStreamingReverse(enhancedUserMessage, learningOnChunk, onToolCall, onToolResult))
                 }
                 else -> {
-                    emitAll(sendMessageNonStreaming(enhancedUserMessage, onChunk, onToolCall, onToolResult))
+                    emitAll(sendMessageNonStreaming(enhancedUserMessage, learningOnChunk, onToolCall, onToolResult))
                 }
             }
             return@flow
         }
         
         // Use internal streaming function with enhanced message
-        emitAll(sendMessageStreamInternal(enhancedUserMessage, onChunk, onToolCall, onToolResult))
+        emitAll(sendMessageStreamInternal(enhancedUserMessage, learningOnChunk, onToolCall, onToolResult, accumulatedContent, userMessage))
     }
     
     /**
@@ -98,7 +122,9 @@ class GeminiClient(
         userMessage: String,
         onChunk: (String) -> Unit,
         onToolCall: (FunctionCall) -> Unit,
-        onToolResult: (String, Map<String, Any>) -> Unit
+        onToolResult: (String, Map<String, Any>) -> Unit,
+        accumulatedContent: StringBuilder,
+        originalUserMessage: String
     ): Flow<GeminiStreamEvent> = flow {
         // Add user message to history (only if it's not already a function response or continuation)
         val isContinuation = userMessage == "__CONTINUE__"
@@ -238,6 +264,20 @@ class GeminiClient(
                     // Emit ToolResult event for UI
                     emit(GeminiStreamEvent.ToolResult(functionCall.name, toolResult))
                     
+                    // Learn from successful tool results
+                    if (toolResult.error == null) {
+                        val toolResultContent = when {
+                            toolResult.llmContent is String -> toolResult.llmContent as String
+                            else -> toolResult.toString()
+                        }
+                        AutoAgentLearningService.learnFromToolResult(
+                            toolName = functionCall.name,
+                            result = toolResultContent,
+                            success = true,
+                            source = LearnedDataSource.NORMAL_FLOW
+                        )
+                    }
+                    
                     // Format response based on tool result
                     val responseContent = when {
                         toolResult.error != null -> {
@@ -278,6 +318,26 @@ class GeminiClient(
                 when (finishReason) {
                     "STOP" -> {
                         android.util.Log.d("GeminiClient", "sendMessageStream: Stream completed (STOP) - model indicates task is complete")
+                        // Learn from successful completion using enhanced learning
+                        val finalContent = accumulatedContent.toString()
+                        if (finalContent.isNotEmpty() && finalContent.length > 50) {
+                            // Use enhanced learning service for prompt → metadata → code flow
+                            EnhancedLearningService.learnFromCompleteGeneration(
+                                userPrompt = originalUserMessage,
+                                generatedCode = finalContent,
+                                metadata = mapOf("provider" to ApiProviderManager.selectedProvider.name),
+                                source = LearnedDataSource.NORMAL_FLOW
+                            )
+                            
+                            // Also keep legacy learning for compatibility
+                            AutoAgentLearningService.learnFromCodeGeneration(
+                                code = finalContent,
+                                context = originalUserMessage,
+                                source = LearnedDataSource.NORMAL_FLOW,
+                                metadata = mapOf("provider" to ApiProviderManager.selectedProvider.name),
+                                userPrompt = originalUserMessage
+                            )
+                        }
                         // Check if we should continue - if there are pending todos, the task might not be complete
                         // But for now, trust the model's STOP signal
                         emit(GeminiStreamEvent.Done)
