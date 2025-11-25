@@ -231,15 +231,16 @@ object ClassificationModelManager {
     
     /**
      * Set AutoAgent model name (separate from other providers)
-     * This also ensures the database is created for this model name
+     * This also ensures the database is created and initialized with framework knowledge for this model name
      */
     fun setAutoAgentModelName(modelName: String) {
         Preference.setString(PREF_AUTOAGENT_MODEL_NAME, modelName)
-        // Ensure database is created for this model name
+        // Ensure database is created and initialized for this model name
         // getInstance() will automatically create the database if it doesn't exist
-        val database = LearningDatabase.getInstance(modelName)
-        // Database is created automatically in getInstance() via getWritableDatabase()
-        // No need to close here - let it stay open for use
+        // and getWritableDatabase() (called internally) will ensure framework knowledge is populated
+        LearningDatabase.getInstance(modelName)
+        // The database initialization (including framework knowledge population) happens
+        // automatically in getInstance() -> getWritableDatabase() when the database is opened
     }
     
     /**

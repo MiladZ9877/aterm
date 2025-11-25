@@ -114,6 +114,24 @@ class LearningDatabase private constructor(private val modelName: String = "ater
                         database!!.execSQL("PRAGMA user_version = $DATABASE_VERSION")
                         // Re-initialize framework knowledge after upgrade
                         FrameworkKnowledgeBase.initializeDatabase(database!!)
+                    } else {
+                        // Check if framework knowledge exists, populate if not
+                        val frameworkCursor = database!!.rawQuery(
+                            "SELECT COUNT(*) FROM $TABLE_LEARNED_DATA WHERE $COL_TYPE = ?",
+                            arrayOf("framework_knowledge")
+                        )
+                        val frameworkCount = if (frameworkCursor.moveToFirst()) {
+                            frameworkCursor.getInt(0)
+                        } else {
+                            0
+                        }
+                        frameworkCursor.close()
+                        
+                        // If no framework knowledge exists, populate it
+                        if (frameworkCount == 0) {
+                            android.util.Log.i("LearningDatabase", "No framework knowledge found, initializing...")
+                            FrameworkKnowledgeBase.initializeDatabase(database!!)
+                        }
                     }
                 }
             }

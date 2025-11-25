@@ -32,6 +32,7 @@ fun ClassificationModelSettings() {
     var selectedModel by remember { mutableStateOf(ClassificationModelManager.getSelectedModel()) }
     var showAddModelDialog by remember { mutableStateOf(false) }
     var showDownloadDialog by remember { mutableStateOf<ClassificationModelManager.ClassificationModel?>(null) }
+    var showResetConfirmation by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     
     LaunchedEffect(Unit) {
@@ -296,6 +297,31 @@ fun ClassificationModelSettings() {
                 onClick = { showAddModelDialog = true }
             )
         }
+        
+        // Reset AutoAgent Database section
+        Divider(modifier = Modifier.padding(vertical = 16.dp))
+        
+        PreferenceGroup(heading = "AutoAgent Database") {
+            SettingsCard(
+                title = { Text("Reset AutoAgent Database") },
+                description = {
+                    Column {
+                        Text(
+                            "Reset the AutoAgent learning database. This will delete all learned data but restore framework knowledge.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                },
+                startWidget = {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                },
+                onClick = { showResetConfirmation = true }
+            )
+        }
     }
     
     // Add model dialog
@@ -341,6 +367,78 @@ fun ClassificationModelSettings() {
                 models = ClassificationModelManager.getAvailableModels()
                 selectedModel = ClassificationModelManager.getSelectedModel()
                 showDownloadDialog = null
+            }
+        )
+    }
+    
+    // Reset Database Confirmation Dialog
+    if (showResetConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showResetConfirmation = false },
+            title = { Text("Reset AutoAgent Database") },
+            text = {
+                Column {
+                    Text("Are you sure you want to reset the AutoAgent learning database?")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "This will permanently delete all learned data including:",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text("• Code snippets", style = MaterialTheme.typography.bodySmall)
+                    Text("• API usage patterns", style = MaterialTheme.typography.bodySmall)
+                    Text("• Fix patches", style = MaterialTheme.typography.bodySmall)
+                    Text("• Metadata transformations", style = MaterialTheme.typography.bodySmall)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Note: Framework knowledge (HTML, CSS, JavaScript, Node.js, Python, Java, Kotlin, MVC) will be automatically restored.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "This action cannot be undone.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val modelName = ClassificationModelManager.getAutoAgentModelName()
+                                val database = com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
+                                val success = database.resetDatabase()
+                                
+                                // Re-initialize services with the reset database
+                                com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
+                                com.qali.aterm.autogent.AutoAgentLearningService.initialize()
+                                
+                                withContext(Dispatchers.Main) {
+                                    showResetConfirmation = false
+                                }
+                                
+                                android.util.Log.i("AutoAgent", "Database reset ${if (success) "successful" else "failed"}")
+                            } catch (e: Exception) {
+                                android.util.Log.e("AutoAgent", "Error resetting database", e)
+                                withContext(Dispatchers.Main) {
+                                    showResetConfirmation = false
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Reset Database")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetConfirmation = false }) {
+                    Text("Cancel")
+                }
             }
         )
     }

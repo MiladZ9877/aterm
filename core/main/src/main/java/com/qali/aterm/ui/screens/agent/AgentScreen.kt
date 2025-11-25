@@ -1034,7 +1034,6 @@ fun DebugDialog(
     var systemInfo by remember { mutableStateOf<String?>(null) }
     var testInfo by remember { mutableStateOf<String?>(null) }
     var autoAgentDebugInfo by remember { mutableStateOf<String?>(null) }
-    var showResetConfirmation by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     
     // Load all debug information when dialog opens
@@ -1643,25 +1642,6 @@ fun DebugDialog(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Copy", fontSize = 12.sp)
                 }
-                // Reset AutoAgent Database button (only show if AutoAgent is available)
-                if (ApiProviderManager.selectedProvider == ApiProviderType.AUTOAGENT || 
-                    com.qali.aterm.autogent.ClassificationModelManager.getSelectedModel() != null) {
-                    Button(
-                        onClick = { showResetConfirmation = true },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer
-                        )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Reset DB", fontSize = 12.sp)
-                    }
-                }
                 TextButton(
                     onClick = onDismiss,
                     modifier = Modifier.weight(0.8f)
@@ -1671,73 +1651,6 @@ fun DebugDialog(
             }
         }
     )
-    
-    // Reset Database Confirmation Dialog
-    if (showResetConfirmation) {
-        AlertDialog(
-            onDismissRequest = { showResetConfirmation = false },
-            title = { Text("Reset AutoAgent Database") },
-            text = {
-                Column {
-                    Text("Are you sure you want to reset the AutoAgent learning database?")
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "This will permanently delete all learned data including:",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text("• Code snippets", style = MaterialTheme.typography.bodySmall)
-                    Text("• API usage patterns", style = MaterialTheme.typography.bodySmall)
-                    Text("• Fix patches", style = MaterialTheme.typography.bodySmall)
-                    Text("• Metadata transformations", style = MaterialTheme.typography.bodySmall)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "This action cannot be undone.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                val modelName = com.qali.aterm.autogent.ClassificationModelManager.getAutoAgentModelName()
-                                val database = com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
-                                val success = database.resetDatabase()
-                                
-                                // Re-initialize services with the reset database
-                                com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
-                                com.qali.aterm.autogent.AutoAgentLearningService.initialize()
-                                
-                                withContext(Dispatchers.Main) {
-                                    showResetConfirmation = false
-                                    onDismiss() // Close debug dialog after reset
-                                }
-                                
-                                android.util.Log.i("AutoAgent", "Database reset ${if (success) "successful" else "failed"}")
-                            } catch (e: Exception) {
-                                android.util.Log.e("AutoAgent", "Error resetting database", e)
-                                withContext(Dispatchers.Main) {
-                                    showResetConfirmation = false
-                                }
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text("Reset Database")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showResetConfirmation = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
