@@ -182,7 +182,7 @@ object EditFailureMonitor {
                 recommendations.add("Overall edit success rate is ${(overallFailureRate * 100).toInt()}% - consider improving string matching")
             }
             
-            val failureReasons = overallStats["failureReasons"] as? Map<*, *> ?: emptyMap()
+            val failureReasons = overallStats["failureReasons"] as? Map<String, Int> ?: emptyMap<String, Int>()
             val stringNotFound = failureReasons["String not found"] as? Int ?: 0
             if (stringNotFound > 10) {
                 recommendations.add("'String not found' is the main issue ($stringNotFound occurrences) - improve context in old_string")

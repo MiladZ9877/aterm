@@ -3996,6 +3996,7 @@ exports.$functionName = (req, res, next) => {
         onChunk(runningMsg)
         
         // Check if command/tool is available - use cache first
+        var checkResult: ToolResult? = null
         if (command.checkCommand != null) {
             // Try to get from cache first
             val dependencyName = command.description.lowercase().split(" ").firstOrNull() ?: "tool"
@@ -4008,11 +4009,18 @@ exports.$functionName = (req, res, next) => {
             if (cachedAvailable == false) {
                 // Tool is known to be unavailable from cache, skip to fallbacks
                 android.util.Log.d("GeminiClient", "Tool $dependencyName unavailable (cached), skipping check")
-                // Fall through to fallback logic
+                checkResult = ToolResult(
+                    llmContent = "Tool not available (cached)",
+                    returnDisplay = "Not available",
+                    error = ToolError(
+                        message = "Tool not available (cached)",
+                        type = ToolErrorType.EXECUTION_ERROR
+                    )
+                )
             } else if (cachedAvailable == true) {
                 // Tool is known to be available from cache, skip check
                 android.util.Log.d("GeminiClient", "Tool $dependencyName available (cached), skipping check")
-                // Continue with primary command
+                // Continue with primary command - checkResult remains null (success)
             } else {
                 // Cache miss - need to check
                 val checkCall = FunctionCall(
@@ -4026,7 +4034,7 @@ exports.$functionName = (req, res, next) => {
                 onToolCall(checkCall)
                 
                 try {
-                    val checkResult = executeToolSync("shell", checkCall.args)
+                    checkResult = executeToolSync("shell", checkCall.args)
                     emit(GeminiStreamEvent.ToolResult("shell", checkResult))
                     onToolResult("shell", checkCall.args)
                     
@@ -4037,70 +4045,23 @@ exports.$functionName = (req, res, next) => {
                         checkCommand = command.checkCommand!!,
                         workspaceRoot = workspaceRoot
                     )
-                    
-                    if (checkResult.error != null) {
-                    // Tool not available, try fallbacks in order
-                    val fallbackMsg = "⚠️ Tool not found, trying fallbacks...\n"
-                    emit(GeminiStreamEvent.Chunk(fallbackMsg))
-                    onChunk(fallbackMsg)
-                    
-                    var fallbackSuccess = false
-                    for ((index, fallback) in command.fallbacks.withIndex()) {
-                        val fallbackStepMsg = "📦 Fallback ${index + 1}/${command.fallbacks.size}: $fallback\n"
-                        emit(GeminiStreamEvent.Chunk(fallbackStepMsg))
-                        onChunk(fallbackStepMsg)
-                        
-                        val fallbackCall = FunctionCall(
-                            name = "shell",
-                            args = mapOf(
-                                "command" to fallback,
-                                "description" to "Setup/install for ${command.description}",
-                                "dir_path" to workspaceRoot
-                            )
+                } catch (e: Exception) {
+                    android.util.Log.w("GeminiClient", "Check command failed: ${e.message}")
+                    // Cache as unavailable
+                    com.qali.aterm.gemini.utils.DependencyCache.cacheResult(
+                        dependency = dependencyName,
+                        available = false,
+                        checkCommand = command.checkCommand!!,
+                        workspaceRoot = workspaceRoot
+                    )
+                    checkResult = ToolResult(
+                        llmContent = "Check failed: ${e.message}",
+                        returnDisplay = "Error",
+                        error = ToolError(
+                            message = e.message ?: "Unknown error",
+                            type = ToolErrorType.EXECUTION_ERROR
                         )
-                        emit(GeminiStreamEvent.ToolCall(fallbackCall))
-                        onToolCall(fallbackCall)
-                        
-                        try {
-                            val fallbackResult = executeToolSync("shell", fallbackCall.args)
-                            emit(GeminiStreamEvent.ToolResult("shell", fallbackResult))
-                            onToolResult("shell", fallbackCall.args)
-                            
-                            if (fallbackResult.error == null) {
-                                // Fallback successful, continue to next or retry check
-                                fallbackSuccess = true
-                                
-                                // If this was venv creation or activation, re-check the tool
-                                if (fallback.contains("venv") || fallback.contains("activate")) {
-                                    emit(GeminiStreamEvent.Chunk("✅ Environment setup complete, rechecking tool...\n"))
-                                    onChunk("✅ Environment setup complete, rechecking tool...\n")
-                                    
-                                    val recheckCall = FunctionCall(
-                                        name = "shell",
-                                        args = mapOf(
-                                            "command" to command.checkCommand!!,
-                                            "description" to "Recheck if ${command.description} tool is available"
-                                        )
-                                    )
-                                    emit(GeminiStreamEvent.ToolCall(recheckCall))
-                                    onToolCall(recheckCall)
-                                    
-                                    val recheckResult = executeToolSync("shell", recheckCall.args)
-                                    emit(GeminiStreamEvent.ToolResult("shell", recheckResult))
-                                    onToolResult("shell", recheckCall.args)
-                                    
-                                    if (recheckResult.error == null) {
-                                        break // Tool is now available
-                                    }
-                                } else {
-                                    // For install commands, break and try primary command
-                                    break
-                                }
-                            }
-                        } catch (e: Exception) {
-                        android.util.Log.w("GeminiClient", "Fallback command failed: ${e.message}")
-                        // Continue to next fallback
-                    }
+                    )
                 }
             }
             
@@ -4160,14 +4121,10 @@ exports.$functionName = (req, res, next) => {
                 }
                 
                 if (!fallbackSuccess && command.fallbacks.isNotEmpty()) {
-                        val allFailedMsg = "⚠️ All fallbacks failed, but continuing with primary command...\n"
-                        emit(GeminiStreamEvent.Chunk(allFailedMsg))
-                        onChunk(allFailedMsg)
-                    }
+                    val allFailedMsg = "⚠️ All fallbacks failed, but continuing with primary command...\n"
+                    emit(GeminiStreamEvent.Chunk(allFailedMsg))
+                    onChunk(allFailedMsg)
                 }
-            } catch (e: Exception) {
-                android.util.Log.w("GeminiClient", "Check command failed: ${e.message}")
-                // Continue to try primary command anyway
             }
         }
         
