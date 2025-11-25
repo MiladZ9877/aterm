@@ -1330,12 +1330,27 @@ fun DebugDialog(
             
             // Configuration
             appendLine("--- Configuration ---")
-            appendLine("Provider: ${if (useOllama) "Ollama" else "Gemini"}")
+            val currentProvider = ApiProviderManager.selectedProvider
+            val providerName = when (currentProvider) {
+                ApiProviderType.AUTOAGENT -> "AutoAgent"
+                ApiProviderType.OLLAMA -> "Ollama"
+                else -> currentProvider.displayName
+            }
+            appendLine("Provider: $providerName")
             if (useOllama) {
                 appendLine("Host: $ollamaHost")
                 appendLine("Port: $ollamaPort")
                 appendLine("Model: $ollamaModel")
                 appendLine("URL: $ollamaUrl")
+            } else if (currentProvider == ApiProviderType.AUTOAGENT) {
+                val autoAgentModel = com.qali.aterm.autogent.ClassificationModelManager.getAutoAgentModelName()
+                val selectedModel = com.qali.aterm.autogent.ClassificationModelManager.getSelectedModel()
+                appendLine("Model: $autoAgentModel")
+                if (selectedModel != null) {
+                    appendLine("Classification Model: ${selectedModel.name} (${selectedModel.id})")
+                    appendLine("Model Type: ${selectedModel.modelType}")
+                    appendLine("Model Ready: ${com.qali.aterm.autogent.ClassificationModelManager.isModelReady()}")
+                }
             } else {
                 val model = com.qali.aterm.api.ApiProviderManager.getCurrentModel()
                 appendLine("Model: $model")

@@ -88,15 +88,74 @@ object FuzzyStringMatcher {
         val firstLine = oldLines.first().trim()
         val lastLine = oldLines.lastOrNull()?.trim() ?: firstLine
         
+        // Limit search to prevent OOM on very large files
+        val maxContentSize = 5_000_000 // 5MB limit
+        if (normalizedContent.length > maxContentSize) {
+            // For very large files, only search in first and last portions
+            val searchPortion = maxContentSize / 2
+            val firstPortion = normalizedContent.substring(0, minOf(searchPortion, normalizedContent.length))
+            val lastPortion = if (normalizedContent.length > searchPortion) {
+                normalizedContent.substring(maxOf(0, normalizedContent.length - searchPortion))
+            } else {
+                ""
+            }
+            
+            // Try first portion
+            val firstLineIndices = findAllIndices(firstPortion, firstLine)
+            val lastLineIndices = findAllIndices(firstPortion, lastLine)
+            
+            var bestMatch: MatchResult? = null
+            var bestSimilarity = 0.0
+            
+            // Limit iterations to prevent OOM
+            val maxIterations = 100
+            var iterations = 0
+            for (firstIdx in firstLineIndices.take(10)) {
+                for (lastIdx in lastLineIndices.take(10)) {
+                    if (++iterations > maxIterations) break
+                    if (lastIdx <= firstIdx) continue
+                    
+                    val regionStart = maxOf(0, firstIdx - contextWindow)
+                    val regionEnd = minOf(firstPortion.length, lastIdx + lastLine.length + contextWindow)
+                    val region = firstPortion.substring(regionStart, regionEnd)
+                    
+                    val sim = similarity(region, normalizedOld)
+                    if (sim >= minSimilarity && sim > bestSimilarity) {
+                        val adjustedStart = findBestStart(region, normalizedOld, firstIdx - regionStart)
+                        val adjustedEnd = adjustedStart + normalizedOld.length
+                        
+                        if (adjustedStart >= 0 && adjustedEnd <= region.length) {
+                            val matchedText = region.substring(adjustedStart, adjustedEnd)
+                            bestMatch = MatchResult(
+                                startIndex = regionStart + adjustedStart,
+                                endIndex = regionStart + adjustedEnd,
+                                similarity = sim,
+                                matchedText = matchedText,
+                                adjustedOldString = matchedText
+                            )
+                            bestSimilarity = sim
+                        }
+                    }
+                }
+                if (iterations > maxIterations) break
+            }
+            
+            return bestMatch
+        }
+        
         val firstLineIndices = findAllIndices(normalizedContent, firstLine)
         val lastLineIndices = findAllIndices(normalizedContent, lastLine)
         
         var bestMatch: MatchResult? = null
         var bestSimilarity = 0.0
         
+        // Limit iterations to prevent OOM
+        val maxIterations = 500
+        var iterations = 0
         // Check each potential match region
-        for (firstIdx in firstLineIndices) {
-            for (lastIdx in lastLineIndices) {
+        for (firstIdx in firstLineIndices.take(20)) {
+            for (lastIdx in lastLineIndices.take(20)) {
+                if (++iterations > maxIterations) break
                 if (lastIdx <= firstIdx) continue
                 
                 // Extract potential match region
@@ -125,6 +184,7 @@ object FuzzyStringMatcher {
                     }
                 }
             }
+            if (iterations > maxIterations) break
         }
         
         // Strategy 2: Line-by-line fuzzy matching
@@ -158,13 +218,17 @@ object FuzzyStringMatcher {
     
     /**
      * Find all indices where substring occurs in text
+     * Limits results to prevent OOM on very large files
      */
     private fun findAllIndices(text: String, substring: String): List<Int> {
         val indices = mutableListOf<Int>()
+        val maxIndices = 1000 // Limit to prevent OOM
         var index = text.indexOf(substring)
-        while (index >= 0) {
+        var count = 0
+        while (index >= 0 && count < maxIndices) {
             indices.add(index)
             index = text.indexOf(substring, index + 1)
+            count++
         }
         return indices
     }

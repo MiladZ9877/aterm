@@ -139,6 +139,7 @@ object AutoAgentLogger {
                 appendLine("Type: ${selectedModel.modelType}")
                 appendLine("Downloaded: ${selectedModel.isDownloaded}")
                 appendLine("Ready: ${ClassificationModelManager.isModelReady()}")
+                appendLine("AutoAgent Model Name: ${ClassificationModelManager.getAutoAgentModelName()}")
             } else {
                 appendLine("No model selected")
             }

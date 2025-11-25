@@ -17,7 +17,17 @@ object AutoAgentLearningService {
     private val classifier = TextClassifier
     
     /**
+     * Initialize database with AutoAgent-specific model name
+     * This is separate from other providers' model names
+     */
+    fun initialize() {
+        val modelName = ClassificationModelManager.getAutoAgentModelName()
+        database = LearningDatabase.getInstance(modelName)
+    }
+    
+    /**
      * Update database instance based on model name
+     * @deprecated Use initialize() instead to use AutoAgent-specific model name
      */
     fun updateDatabaseForModel(modelName: String) {
         database = LearningDatabase.getInstance(modelName)
@@ -58,6 +68,9 @@ object AutoAgentLearningService {
     ) {
         if (!shouldLearn()) return
         
+        // Initialize with AutoAgent-specific model name (separate from other providers)
+        initialize()
+        
         AutoAgentLogger.debug("AutoAgentLearning", "Learning from code generation", mapOf(
             "codeLength" to code.length,
             "source" to source,
@@ -87,6 +100,9 @@ object AutoAgentLearningService {
     ) {
         if (!shouldLearn()) return
         
+        // Initialize with AutoAgent-specific model name (separate from other providers)
+        initialize()
+        
         learningQueue.offer(
             LearningTask.StreamingChunk(
                 chunk = chunk,
@@ -110,6 +126,9 @@ object AutoAgentLearningService {
         keywords: List<String>? = null
     ) {
         if (!shouldLearn()) return
+        
+        // Initialize with AutoAgent-specific model name (separate from other providers)
+        initialize()
         
         learningQueue.offer(
             LearningTask.Fix(
@@ -135,6 +154,9 @@ object AutoAgentLearningService {
         source: String = LearnedDataSource.NORMAL_FLOW
     ) {
         if (!shouldLearn()) return
+        
+        // Initialize with AutoAgent-specific model name (separate from other providers)
+        initialize()
         
         AutoAgentLogger.debug("AutoAgentLearning", "Learning from question-answer", mapOf(
             "questionLength" to question.length,
@@ -164,6 +186,9 @@ object AutoAgentLearningService {
         source: String = LearnedDataSource.NORMAL_FLOW
     ) {
         if (!shouldLearn() || !success) return
+        
+        // Initialize with AutoAgent-specific model name (separate from other providers)
+        initialize()
         
         learningQueue.offer(
             LearningTask.ToolResult(

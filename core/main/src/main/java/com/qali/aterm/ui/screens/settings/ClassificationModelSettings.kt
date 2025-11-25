@@ -15,9 +15,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.InputStream
+import java.io.FileOutputStream
 import android.net.Uri
+import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -33,6 +37,13 @@ fun ClassificationModelSettings() {
     LaunchedEffect(Unit) {
         models = ClassificationModelManager.getAvailableModels()
         selectedModel = ClassificationModelManager.getSelectedModel()
+        // Set AutoAgent model name from selected model if not already set
+        selectedModel?.let { model ->
+            val currentAutoAgentModel = ClassificationModelManager.getAutoAgentModelName()
+            if (currentAutoAgentModel == "aterm-offline" || currentAutoAgentModel.isEmpty()) {
+                ClassificationModelManager.setAutoAgentModelName(model.name)
+            }
+        }
     }
     
     PreferenceGroup(heading = "Text Classification Model (Required for AutoAgent)") {
@@ -88,11 +99,18 @@ fun ClassificationModelSettings() {
                             model.description,
                             style = MaterialTheme.typography.bodySmall
                         )
-                        if (model.isDownloaded && model.filePath != null) {
+                        val isReady = ClassificationModelManager.isModelReady()
+                        if (isReady) {
                             Text(
                                 "✓ Model downloaded and ready",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary
+                            )
+                        } else if (model.isDownloaded && model.filePath != null) {
+                            Text(
+                                "⚠ Model downloaded but not ready (file may be invalid)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
                             )
                         } else {
                             Text(
@@ -136,6 +154,18 @@ fun ClassificationModelSettings() {
                         onSelect = {
                             ClassificationModelManager.setSelectedModel(model.id)
                             selectedModel = ClassificationModelManager.getSelectedModel()
+                            // Set AutoAgent model name to match selected classification model
+                            ClassificationModelManager.setAutoAgentModelName(model.name)
+                            // Mark model as ready if file exists
+                            scope.launch(Dispatchers.IO) {
+                                val filePath = ClassificationModelManager.getModelFilePath(model.id)
+                                if (filePath != null) {
+                                    val file = File(filePath)
+                                    if (file.exists() && file.length() > 0) {
+                                        ClassificationModelManager.markModelReady(model.id, true)
+                                    }
+                                }
+                            }
                         },
                         onDownload = {
                             showDownloadDialog = model
@@ -160,6 +190,18 @@ fun ClassificationModelSettings() {
                         onSelect = {
                             ClassificationModelManager.setSelectedModel(model.id)
                             selectedModel = ClassificationModelManager.getSelectedModel()
+                            // Set AutoAgent model name to match selected classification model
+                            ClassificationModelManager.setAutoAgentModelName(model.name)
+                            // Mark model as ready if file exists
+                            scope.launch(Dispatchers.IO) {
+                                val filePath = ClassificationModelManager.getModelFilePath(model.id)
+                                if (filePath != null) {
+                                    val file = File(filePath)
+                                    if (file.exists() && file.length() > 0) {
+                                        ClassificationModelManager.markModelReady(model.id, true)
+                                    }
+                                }
+                            }
                         },
                         onDownload = if (model.downloadUrl != null) {
                             { showDownloadDialog = model }
@@ -187,6 +229,18 @@ fun ClassificationModelSettings() {
                         onSelect = {
                             ClassificationModelManager.setSelectedModel(model.id)
                             selectedModel = ClassificationModelManager.getSelectedModel()
+                            // Set AutoAgent model name to match selected classification model
+                            ClassificationModelManager.setAutoAgentModelName(model.name)
+                            // Mark model as ready if file exists
+                            scope.launch(Dispatchers.IO) {
+                                val filePath = ClassificationModelManager.getModelFilePath(model.id)
+                                if (filePath != null) {
+                                    val file = File(filePath)
+                                    if (file.exists() && file.length() > 0) {
+                                        ClassificationModelManager.markModelReady(model.id, true)
+                                    }
+                                }
+                            }
                         },
                         onDelete = {
                             scope.launch {
@@ -217,10 +271,19 @@ fun ClassificationModelSettings() {
         AddModelDialog(
             onDismiss = { showAddModelDialog = false },
             onAdd = { model ->
-                scope.launch {
+                scope.launch(Dispatchers.IO) {
                     if (ClassificationModelManager.addCustomModel(model)) {
-                        models = ClassificationModelManager.getAvailableModels()
-                        showAddModelDialog = false
+                        // If model has a file path, verify it exists and mark as ready
+                        if (model.filePath != null) {
+                            val file = File(model.filePath)
+                            if (file.exists() && file.length() > 0) {
+                                ClassificationModelManager.markModelReady(model.id, true)
+                            }
+                        }
+                        withContext(Dispatchers.Main) {
+                            models = ClassificationModelManager.getAvailableModels()
+                            showAddModelDialog = false
+                        }
                     }
                 }
             }
@@ -352,11 +415,13 @@ private fun AddModelDialog(
     onDismiss: () -> Unit,
     onAdd: (ClassificationModelManager.ClassificationModel) -> Unit
 ) {
+    val context = LocalContext.current
     var modelName by remember { mutableStateOf("") }
     var modelDescription by remember { mutableStateOf("") }
     var downloadUrl by remember { mutableStateOf("") }
     var useFilePicker by remember { mutableStateOf(false) }
     var selectedFile by remember { mutableStateOf<Uri?>(null) }
+    val scope = rememberCoroutineScope()
     
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -443,15 +508,52 @@ private fun AddModelDialog(
             TextButton(
                 onClick = {
                     if (modelName.isNotBlank()) {
+                        val modelId = modelName.lowercase().replace(" ", "_")
+                        
+                        // If model was added via file picker, copy file to model directory synchronously
+                        var finalFilePath: String? = null
+                        if (useFilePicker && selectedFile != null) {
+                            try {
+                                val modelDir = File(com.rk.libcommons.localDir(), "aterm/model").apply { mkdirs() }
+                                val extension = when {
+                                    selectedFile.toString().endsWith(".onnx", ignoreCase = true) -> ".onnx"
+                                    selectedFile.toString().endsWith(".tflite", ignoreCase = true) -> ".tflite"
+                                    selectedFile.toString().endsWith(".json", ignoreCase = true) -> ".json"
+                                    selectedFile.toString().endsWith(".txt", ignoreCase = true) -> ".txt"
+                                    else -> ".tflite"
+                                }
+                                val targetFile = File(modelDir, "${modelId}$extension")
+                                
+                                // Copy file from URI to model directory
+                                context.contentResolver.openInputStream(selectedFile!!)?.use { input ->
+                                    FileOutputStream(targetFile).use { output ->
+                                        input.copyTo(output)
+                                    }
+                                }
+                                
+                                finalFilePath = targetFile.absolutePath
+                                
+                                // Mark model as ready if file was copied successfully
+                                if (targetFile.exists() && targetFile.length() > 0) {
+                                    scope.launch(Dispatchers.IO) {
+                                        ClassificationModelManager.markModelReady(modelId, true)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("ClassificationModelSettings", "Error copying model file", e)
+                            }
+                        }
+                        
                         val model = ClassificationModelManager.ClassificationModel(
-                            id = modelName.lowercase().replace(" ", "_"),
+                            id = modelId,
                             name = modelName,
                             description = modelDescription,
                             modelType = ClassificationModelManager.ModelType.CUSTOM,
                             downloadUrl = if (!useFilePicker && downloadUrl.isNotBlank()) downloadUrl else null,
-                            filePath = if (useFilePicker && selectedFile != null) selectedFile.toString() else null,
+                            filePath = finalFilePath,
                             isDownloaded = useFilePicker && selectedFile != null
                         )
+                        
                         onAdd(model)
                     }
                 },
@@ -571,6 +673,15 @@ private fun DownloadModelDialog(
                                         true
                                     )
                                 }
+                                
+                                // Mark model as ready (successfully downloaded)
+                                // Note: Actual model loading/validation would happen here if needed
+                                // For now, we mark it as ready if file exists and is not empty
+                                val file = File(filePath)
+                                if (file.exists() && file.length() > 0) {
+                                    ClassificationModelManager.markModelReady(model.id, true)
+                                }
+                                
                                 onDownloadComplete()
                             } catch (e: Exception) {
                                 error = e.message ?: "Download failed"

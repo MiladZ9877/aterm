@@ -22,6 +22,8 @@ object AutoAgentProvider {
      */
     fun initialize(modelName: String) {
         database = LearningDatabase.getInstance(modelName)
+        // Note: AutoAgentLearningService.initialize() uses separate model name
+        // This is for when AutoAgent is active, using the model name passed here
         AutoAgentLearningService.updateDatabaseForModel(modelName)
     }
     
@@ -123,8 +125,8 @@ object AutoAgentProvider {
                 return@flow
             }
             
-            // Initialize with current model name
-            val modelName = com.qali.aterm.api.ApiProviderManager.getCurrentModel()
+            // Initialize with AutoAgent-specific model name (separate from other providers)
+            val modelName = ClassificationModelManager.getAutoAgentModelName()
             initialize(modelName)
             AutoAgentLogger.debug("AutoAgentProvider", "Initialized with model", mapOf("modelName" to modelName))
             

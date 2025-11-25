@@ -15,6 +15,8 @@ object ClassificationModelManager {
     private val gson = Gson()
     private const val PREF_MODELS = "classification_models"
     private const val PREF_SELECTED_MODEL = "selected_classification_model"
+    private const val PREF_AUTOAGENT_MODEL_NAME = "autoagent_model_name"
+    private const val PREF_MODEL_READY = "classification_model_ready"
     
     data class ClassificationModel(
         val id: String,
@@ -218,12 +220,41 @@ object ClassificationModelManager {
     }
     
     /**
+     * Get AutoAgent model name (separate from other providers)
+     * This is the model name used when AutoAgent is learning from other providers
+     */
+    fun getAutoAgentModelName(): String {
+        return Preference.getString(PREF_AUTOAGENT_MODEL_NAME, "").takeIf { it.isNotEmpty() }
+            ?: getSelectedModel()?.name
+            ?: "aterm-offline"
+    }
+    
+    /**
+     * Set AutoAgent model name (separate from other providers)
+     */
+    fun setAutoAgentModelName(modelName: String) {
+        Preference.setString(PREF_AUTOAGENT_MODEL_NAME, modelName)
+    }
+    
+    /**
      * Check if model is available and ready
+     * This checks both file existence and whether model has been successfully loaded
      */
     fun isModelReady(): Boolean {
         val selected = getSelectedModel() ?: return false
-        val filePath = getModelFilePath(selected.id)
-        return filePath != null && File(filePath).exists()
+        val filePath = getModelFilePath(selected.id) ?: return false
+        if (!File(filePath).exists()) return false
+        
+        // Check if model has been marked as ready (successfully loaded)
+        val isReady = Preference.getBoolean("${PREF_MODEL_READY}_${selected.id}", false)
+        return isReady
+    }
+    
+    /**
+     * Mark model as ready (successfully loaded)
+     */
+    fun markModelReady(modelId: String, ready: Boolean = true) {
+        Preference.setBoolean("${PREF_MODEL_READY}_${modelId}", ready)
     }
     
     /**
