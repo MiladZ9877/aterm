@@ -38,21 +38,10 @@ fun AutoAgentSettings() {
     LaunchedEffect(Unit) {
         models = ClassificationModelManager.getAvailableModels()
         selectedModel = ClassificationModelManager.getSelectedModel()
-        // Set AutoAgent model name from selected model if not already set
-        // This also ensures the database is created
-        selectedModel?.let { model ->
-            val currentAutoAgentModel = ClassificationModelManager.getAutoAgentModelName()
-            if (currentAutoAgentModel == "aterm-offline" || currentAutoAgentModel.isEmpty()) {
-                ClassificationModelManager.setAutoAgentModelName(model.name)
-                // Ensure database is created for this model name
-                scope.launch(Dispatchers.IO) {
-                    val modelName = ClassificationModelManager.getAutoAgentModelName()
-                    com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
-                    com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
-                    com.qali.aterm.autogent.AutoAgentLearningService.initialize()
-                }
-            }
-        }
+        // Update dbModelName state
+        dbModelName = ClassificationModelManager.getAutoAgentModelName()
+        // Note: Database model name is separate from text classifier model
+        // Text classifier is used for learning when AutoAgent is inactive
     }
     
     PreferenceGroup(heading = "AutoAgent Settings") {
@@ -145,25 +134,92 @@ fun AutoAgentSettings() {
                 )
             }
             
-            // AutoAgent Database Model Name display
+            // AutoAgent Database Model Name (separate from text classifier)
             Divider(modifier = Modifier.padding(vertical = 8.dp))
+            var showDbNameDialog by remember { mutableStateOf(false) }
+            var dbModelName by remember { mutableStateOf(ClassificationModelManager.getAutoAgentModelName()) }
+            
             SettingsCard(
                 title = { Text("Database Model Name") },
                 description = {
                     Column {
-                        val dbModelName = ClassificationModelManager.getAutoAgentModelName()
                         Text(
-                            dbModelName,
+                            dbModelName.ifEmpty { "Not set" },
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            "This is the model name used for the AutoAgent learning database. The database is automatically created and initialized when a classification model is selected.",
+                            "This is the name for the AutoAgent learning database. When set, the database will be created and initialized with framework knowledge. The text classifier model above is used separately for learning when AutoAgent is inactive.",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
                 },
-                onClick = { /* Display only, no action */ }
+                endWidget = {
+                    Icon(Icons.Default.Edit, contentDescription = "Edit Database Model Name")
+                },
+                onClick = { showDbNameDialog = true }
             )
+            
+            // Database Model Name Dialog
+            if (showDbNameDialog) {
+                var newDbName by remember { mutableStateOf(dbModelName) }
+                AlertDialog(
+                    onDismissRequest = { showDbNameDialog = false },
+                    title = { Text("Set Database Model Name") },
+                    text = {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                "Enter a name for the AutoAgent learning database. The database will be created and initialized with framework knowledge when you save.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            OutlinedTextField(
+                                value = newDbName,
+                                onValueChange = { newDbName = it },
+                                label = { Text("Database Model Name") },
+                                placeholder = { Text("e.g., my-autogent-db") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                if (newDbName.isNotBlank()) {
+                                    // Set the database model name
+                                    ClassificationModelManager.setAutoAgentModelName(newDbName)
+                                    dbModelName = newDbName
+                                    
+                                    // Initialize database with framework knowledge
+                                    scope.launch(Dispatchers.IO) {
+                                        // getInstance() will automatically call getWritableDatabase() internally
+                                        // which will create the database and populate framework knowledge if needed
+                                        val database = com.qali.aterm.autogent.LearningDatabase.getInstance(newDbName)
+                                        // Force database initialization by accessing it (getInstance already does this, but ensure it's done)
+                                        // The database is created and framework knowledge is populated in getWritableDatabase()
+                                        
+                                        // Re-initialize services with the new database name
+                                        com.qali.aterm.autogent.AutoAgentProvider.initialize(newDbName)
+                                        com.qali.aterm.autogent.AutoAgentLearningService.initialize()
+                                    }
+                                    
+                                    showDbNameDialog = false
+                                }
+                            },
+                            enabled = newDbName.isNotBlank()
+                        ) {
+                            Text("Save")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDbNameDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
             
             Divider(modifier = Modifier.padding(vertical = 8.dp))
             
@@ -185,17 +241,9 @@ fun AutoAgentSettings() {
                             onSelect = {
                                 ClassificationModelManager.setSelectedModel(model.id)
                                 selectedModel = ClassificationModelManager.getSelectedModel()
-                                // Set AutoAgent model name to match selected classification model
-                                // This also ensures the database is created for this model name
-                                ClassificationModelManager.setAutoAgentModelName(model.name)
-                                // Initialize AutoAgent services with the new model name
+                                // Text classifier model is separate from database model name
+                                // This is just for selecting the classifier used for learning
                                 scope.launch(Dispatchers.IO) {
-                                    // Ensure database is created
-                                    val modelName = ClassificationModelManager.getAutoAgentModelName()
-                                    com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
-                                    com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
-                                    com.qali.aterm.autogent.AutoAgentLearningService.initialize()
-                                    
                                     // Mark model as ready if file exists
                                     val filePath = ClassificationModelManager.getModelFilePath(model.id)
                                     if (filePath != null) {
@@ -229,17 +277,9 @@ fun AutoAgentSettings() {
                             onSelect = {
                                 ClassificationModelManager.setSelectedModel(model.id)
                                 selectedModel = ClassificationModelManager.getSelectedModel()
-                                // Set AutoAgent model name to match selected classification model
-                                // This also ensures the database is created for this model name
-                                ClassificationModelManager.setAutoAgentModelName(model.name)
-                                // Initialize AutoAgent services with the new model name
+                                // Text classifier model is separate from database model name
+                                // This is just for selecting the classifier used for learning
                                 scope.launch(Dispatchers.IO) {
-                                    // Ensure database is created
-                                    val modelName = ClassificationModelManager.getAutoAgentModelName()
-                                    com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
-                                    com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
-                                    com.qali.aterm.autogent.AutoAgentLearningService.initialize()
-                                    
                                     // Mark model as ready if file exists
                                     val filePath = ClassificationModelManager.getModelFilePath(model.id)
                                     if (filePath != null) {
@@ -276,17 +316,9 @@ fun AutoAgentSettings() {
                             onSelect = {
                                 ClassificationModelManager.setSelectedModel(model.id)
                                 selectedModel = ClassificationModelManager.getSelectedModel()
-                                // Set AutoAgent model name to match selected classification model
-                                // This also ensures the database is created for this model name
-                                ClassificationModelManager.setAutoAgentModelName(model.name)
-                                // Initialize AutoAgent services with the new model name
+                                // Text classifier model is separate from database model name
+                                // This is just for selecting the classifier used for learning
                                 scope.launch(Dispatchers.IO) {
-                                    // Ensure database is created
-                                    val modelName = ClassificationModelManager.getAutoAgentModelName()
-                                    com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
-                                    com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
-                                    com.qali.aterm.autogent.AutoAgentLearningService.initialize()
-                                    
                                     // Mark model as ready if file exists
                                     val filePath = ClassificationModelManager.getModelFilePath(model.id)
                                     if (filePath != null) {
@@ -354,15 +386,8 @@ fun AutoAgentSettings() {
             onAdd = { model ->
                 scope.launch(Dispatchers.IO) {
                     if (ClassificationModelManager.addCustomModel(model)) {
-                        // Set AutoAgent model name to match the new model
-                        // This also ensures the database is created for this model name
-                        ClassificationModelManager.setAutoAgentModelName(model.name)
-                        
-                        // Ensure database is created for this model name
-                        val modelName = ClassificationModelManager.getAutoAgentModelName()
-                        com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
-                        com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
-                        com.qali.aterm.autogent.AutoAgentLearningService.initialize()
+                        // Text classifier model is separate from database model name
+                        // No need to set database model name when adding a classifier model
                         
                         // If model has a file path, verify it exists and mark as ready
                         if (model.filePath != null) {

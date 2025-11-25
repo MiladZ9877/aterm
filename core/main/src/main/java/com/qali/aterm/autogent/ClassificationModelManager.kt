@@ -73,6 +73,14 @@ object ClassificationModelManager {
             isBuiltIn = true
         ),
         ClassificationModel(
+            id = "codebert_tflite",
+            name = "CodeBERT (TFLite)",
+            description = "Code understanding model in TensorFlow Lite format. Optimized for mobile/edge devices. Provides code classification and understanding capabilities similar to CodeBERT ONNX but in TFLite format for better performance on Android.",
+            modelType = ModelType.MEDIAPIPE_BERT,
+            downloadUrl = "https://github.com/microsoft/CodeBERT/releases/download/v1.0/codebert-base.tflite",
+            isBuiltIn = true
+        ),
+        ClassificationModel(
             id = "codebert_tokenizer_vocab",
             name = "CodeBERT Vocabulary",
             description = "Tokenizer vocabulary file (vocab.json) for CodeBERT - Required for CodeBERT ONNX model",
@@ -210,6 +218,12 @@ object ClassificationModelManager {
                     modelId.contains("vocab") -> ".json"
                     modelId.contains("merges") -> ".txt"
                     else -> ".onnx"
+                }
+            }
+            ModelType.MEDIAPIPE_BERT -> {
+                when {
+                    modelId.contains("codebert") -> ".tflite" // CodeBERT TFLite model
+                    else -> ".tflite"
                 }
             }
             else -> ".tflite"
