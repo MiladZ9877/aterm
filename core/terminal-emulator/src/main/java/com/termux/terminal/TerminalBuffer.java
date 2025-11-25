@@ -153,24 +153,50 @@ public final class TerminalBuffer {
             if ((!joinBackLines || !rowLineWrap) && (!joinFullLines || !lineFillsWidth)
                 && row < y2 && row < mScreenRows - 1) builder.append('\n');
         }
-        return builder.toString();
+        // Always return non-null string to prevent NullPointerException
+        String result = builder.toString();
+        return result != null ? result : "";
     }
 
     public String getWordAtLocation(int x, int y) {
+        // Validate input coordinates
+        if (x < 0 || x >= mColumns || y < -getActiveTranscriptRows() || y >= mScreenRows) {
+            return "";
+        }
+        
         // Set y1 and y2 to the lines where the wrapped line starts and ends.
         // I.e. if a line that is wrapped to 3 lines starts at line 4, and this
         // is called with y=5, then y1 would be set to 4 and y2 would be set to 6.
         int y1 = y;
         int y2 = y;
-        while (y1 > 0 && !getSelectedText(0, y1 - 1, mColumns, y, true, true).contains("\n")) {
+        int maxIterations = 100; // Prevent infinite loops
+        int iterations = 0;
+        
+        while (y1 > -getActiveTranscriptRows() && iterations < maxIterations) {
+            String prevText = getSelectedText(0, y1 - 1, mColumns, y, true, true);
+            if (prevText == null || prevText.contains("\n")) {
+                break;
+            }
             y1--;
+            iterations++;
         }
-        while (y2 < mScreenRows && !getSelectedText(0, y, mColumns, y2 + 1, true, true).contains("\n")) {
+        
+        iterations = 0;
+        while (y2 < mScreenRows - 1 && iterations < maxIterations) {
+            String nextText = getSelectedText(0, y, mColumns, y2 + 1, true, true);
+            if (nextText == null || nextText.contains("\n")) {
+                break;
+            }
             y2++;
+            iterations++;
         }
 
-        // Get the text for the whole wrapped line
+        // Get the text for the whole wrapped line with null safety
         String text = getSelectedText(0, y1, mColumns, y2, true, true);
+        if (text == null || text.isEmpty()) {
+            return "";
+        }
+        
         // The index of x in text
         int textOffset = (y - y1) * mColumns + x;
 

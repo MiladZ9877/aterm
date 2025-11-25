@@ -455,9 +455,19 @@ class GeminiClient(
         android.util.Log.d("GeminiClient", "makeApiCall: Provider: $providerType, URL: ${url.replace(apiKey, "***")}")
         android.util.Log.d("GeminiClient", "makeApiCall: Model: $model")
         
+        // Check request body size to avoid Binder transaction failures (limit is ~1MB)
+        val requestBodyString = convertedRequestBody.toString()
+        val requestBodySize = requestBodyString.length
+        android.util.Log.d("GeminiClient", "makeApiCall: Request body size: $requestBodySize bytes")
+        
+        // Warn if request is very large (could cause Binder transaction failures)
+        if (requestBodySize > 800000) { // 800KB threshold
+            android.util.Log.w("GeminiClient", "makeApiCall: Large request body (${requestBodySize} bytes) - may cause Binder transaction issues")
+        }
+        
         val requestBuilder = Request.Builder()
             .url(url)
-            .post(convertedRequestBody.toString().toRequestBody("application/json".toMediaType()))
+            .post(requestBodyString.toRequestBody("application/json".toMediaType()))
         
         // Add headers if any
         headers.forEach { (key, value) ->
@@ -1485,9 +1495,16 @@ class GeminiClient(
         
         val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
         
+        // Check request body size to avoid Binder transaction failures
+        val requestBodyString = requestBody.toString()
+        val requestBodySize = requestBodyString.length
+        if (requestBodySize > 800000) {
+            android.util.Log.w("GeminiClient", "sendMessageNonStreaming: Large request body (${requestBodySize} bytes)")
+        }
+        
         val request = Request.Builder()
             .url(url)
-            .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
+            .post(requestBodyString.toRequestBody("application/json".toMediaType()))
             .build()
         
         return withContext(Dispatchers.IO) {

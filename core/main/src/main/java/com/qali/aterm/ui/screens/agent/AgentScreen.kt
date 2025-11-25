@@ -1038,10 +1038,15 @@ fun DebugDialog(
     // Load all debug information when dialog opens
     LaunchedEffect(Unit) {
         isLoadingLogs = true
-        scope.launch {
-            logcatLogs = readLogcatLogs(300)
+        // Load logs on IO dispatcher to avoid blocking main thread
+        scope.launch(Dispatchers.IO) {
+            val logs = readLogcatLogs(300)
+            // Update UI state on Main dispatcher
+            withContext(Dispatchers.Main) {
+                logcatLogs = logs
+            }
             
-            // Get system information
+            // Get system information (already on IO dispatcher)
             try {
                 val workspaceDir = File(workspaceRoot)
                 val systemInfoBuilder = StringBuilder()
@@ -1074,17 +1079,17 @@ fun DebugDialog(
                 
                 // Get system info from SystemInfoService
                 try {
-                    val systemInfo = com.qali.aterm.gemini.SystemInfoService.detectSystemInfo(workspaceRoot)
+                    val sysInfo = com.qali.aterm.gemini.SystemInfoService.detectSystemInfo(workspaceRoot)
                     systemInfoBuilder.appendLine()
-                    systemInfoBuilder.appendLine("OS: ${systemInfo.os}")
-                    systemInfoBuilder.appendLine("OS Version: ${systemInfo.osVersion ?: "Unknown"}")
-                    systemInfoBuilder.appendLine("Package Manager: ${systemInfo.packageManager}")
-                    systemInfoBuilder.appendLine("Architecture: ${systemInfo.architecture}")
-                    systemInfoBuilder.appendLine("Shell: ${systemInfo.shell}")
+                    systemInfoBuilder.appendLine("OS: ${sysInfo.os}")
+                    systemInfoBuilder.appendLine("OS Version: ${sysInfo.osVersion ?: "Unknown"}")
+                    systemInfoBuilder.appendLine("Package Manager: ${sysInfo.packageManager}")
+                    systemInfoBuilder.appendLine("Architecture: ${sysInfo.architecture}")
+                    systemInfoBuilder.appendLine("Shell: ${sysInfo.shell}")
                     
-                    if (systemInfo.packageManagerCommands.isNotEmpty()) {
+                    if (sysInfo.packageManagerCommands.isNotEmpty()) {
                         systemInfoBuilder.appendLine("Package Manager Commands:")
-                        systemInfo.packageManagerCommands.forEach { (key, value) ->
+                        sysInfo.packageManagerCommands.forEach { (key, value) ->
                             systemInfoBuilder.appendLine("  - $key: $value")
                         }
                     }
@@ -1093,17 +1098,28 @@ fun DebugDialog(
                     systemInfoBuilder.appendLine("System Info: Error - ${e.message}")
                 }
                 
-                systemInfo = systemInfoBuilder.toString()
+                // Update UI state on Main dispatcher
+                val finalSystemInfo = systemInfoBuilder.toString()
+                withContext(Dispatchers.Main) {
+                    systemInfo = finalSystemInfo
+                    isLoadingLogs = false
+                }
             } catch (e: Exception) {
-                systemInfo = "Error getting system info: ${e.message}"
+                // Update UI state on Main dispatcher
+                withContext(Dispatchers.Main) {
+                    systemInfo = "Error getting system info: ${e.message}"
+                    isLoadingLogs = false
+                }
             }
             
-            // Get testing information from messages
-            try {
+            // Get testing information from messages (already on IO dispatcher)
+            // Access messages safely on Main dispatcher to avoid snapshot lock issues
+            val finalTestInfo = try {
+                val messagesSnapshot = withContext(Dispatchers.Main) { messages }
                 val testInfoBuilder = StringBuilder()
-                val toolCalls = messages.filter { !it.isUser && it.text.contains("Tool") }
-                val toolResults = messages.filter { !it.isUser && (it.text.contains("completed") || it.text.contains("Error")) }
-                val testCommands = messages.filter { !it.isUser && (it.text.contains("test") || it.text.contains("npm test") || it.text.contains("pytest") || it.text.contains("cargo test") || it.text.contains("go test") || it.text.contains("mvn test") || it.text.contains("gradle test")) }
+                val toolCalls = messagesSnapshot.filter { !it.isUser && it.text.contains("Tool") }
+                val toolResults = messagesSnapshot.filter { !it.isUser && (it.text.contains("completed") || it.text.contains("Error")) }
+                val testCommands = messagesSnapshot.filter { !it.isUser && (it.text.contains("test") || it.text.contains("npm test") || it.text.contains("pytest") || it.text.contains("cargo test") || it.text.contains("go test") || it.text.contains("mvn test") || it.text.contains("gradle test")) }
                 
                 testInfoBuilder.appendLine("Tool Calls: ${toolCalls.size}")
                 testInfoBuilder.appendLine("Tool Results: ${toolResults.size}")
@@ -1125,10 +1141,10 @@ fun DebugDialog(
                 testInfoBuilder.appendLine("  - todos: $todosCalls")
                 
                 // Code debugging statistics
-                val codeDebugAttempts = messages.count { !it.isUser && (it.text.contains("Code error detected") || it.text.contains("debugging code")) }
-                val codeFixes = messages.count { !it.isUser && (it.text.contains("Code fix applied") || it.text.contains("Fixed __dirname")) }
-                val fallbackAttempts = messages.count { !it.isUser && (it.text.contains("Fallback") || it.text.contains("fallback")) }
-                val esModuleFixes = messages.count { !it.isUser && (it.text.contains("ES Module") || it.text.contains("type: \"module\"")) }
+                val codeDebugAttempts = messagesSnapshot.count { !it.isUser && (it.text.contains("Code error detected") || it.text.contains("debugging code")) }
+                val codeFixes = messagesSnapshot.count { !it.isUser && (it.text.contains("Code fix applied") || it.text.contains("Fixed __dirname")) }
+                val fallbackAttempts = messagesSnapshot.count { !it.isUser && (it.text.contains("Fallback") || it.text.contains("fallback")) }
+                val esModuleFixes = messagesSnapshot.count { !it.isUser && (it.text.contains("ES Module") || it.text.contains("type: \"module\"")) }
                 
                 testInfoBuilder.appendLine()
                 testInfoBuilder.appendLine("Code Debugging:")
@@ -1138,7 +1154,7 @@ fun DebugDialog(
                 testInfoBuilder.appendLine("  - Fallback Attempts: $fallbackAttempts")
                 
                 // Error analysis
-                val errors = messages.filter { !it.isUser && (it.text.contains("Error") || it.text.contains("error") || it.text.contains("failed") || it.text.contains("Failed")) }
+                val errors = messagesSnapshot.filter { !it.isUser && (it.text.contains("Error") || it.text.contains("error") || it.text.contains("failed") || it.text.contains("Failed")) }
                 val codeErrors = errors.count { it.text.contains("SyntaxError") || it.text.contains("TypeError") || it.text.contains("ReferenceError") || it.text.contains("ImportError") }
                 val commandErrors = errors.count { it.text.contains("command not found") || it.text.contains("Exit code") || it.text.contains("127") }
                 val dependencyErrors = errors.count { it.text.contains("module not found") || it.text.contains("package not found") || it.text.contains("Cannot find module") }
@@ -1161,9 +1177,10 @@ fun DebugDialog(
                     testInfoBuilder.appendLine("Success Rate: $successRate% ($successfulTools/$totalTools)")
                 }
                 
-                // API call statistics (from logcat)
-                val apiCalls = logcatLogs?.split("\n")?.count { it.contains("makeApiCall") } ?: 0
-                val apiSuccess = logcatLogs?.split("\n")?.count { it.contains("makeApiCall") && it.contains("Response code: 200") } ?: 0
+                // API call statistics (from logcat) - access logcatLogs safely
+                val logsSnapshot = withContext(Dispatchers.Main) { logcatLogs }
+                val apiCalls = logsSnapshot?.split("\n")?.count { it.contains("makeApiCall") } ?: 0
+                val apiSuccess = logsSnapshot?.split("\n")?.count { it.contains("makeApiCall") && it.contains("Response code: 200") } ?: 0
                 val apiSuccessRate = if (apiCalls > 0) (apiSuccess * 100.0 / apiCalls).toInt() else 0
                 if (apiCalls > 0) {
                     testInfoBuilder.appendLine()
@@ -1198,21 +1215,32 @@ fun DebugDialog(
                     }
                 }
                 
-                testInfo = testInfoBuilder.toString()
+                testInfoBuilder.toString()
             } catch (e: Exception) {
-                testInfo = "Error getting test info: ${e.message}"
+                "Error getting test info: ${e.message}"
             }
             
-            isLoadingLogs = false
+            // Update UI state on Main dispatcher
+            withContext(Dispatchers.Main) {
+                testInfo = finalTestInfo
+                isLoadingLogs = false
+            }
         }
         
         // Load AutoAgent debug info if AutoAgent is selected
         if (ApiProviderManager.selectedProvider == ApiProviderType.AUTOAGENT) {
             scope.launch(Dispatchers.IO) {
                 try {
-                    autoAgentDebugInfo = AutoAgentLogger.getDebugInfo()
+                    val debugInfo = AutoAgentLogger.getDebugInfo()
+                    // Update UI state on Main dispatcher
+                    withContext(Dispatchers.Main) {
+                        autoAgentDebugInfo = debugInfo
+                    }
                 } catch (e: Exception) {
-                    autoAgentDebugInfo = "Error loading AutoAgent debug info: ${e.message}"
+                    // Update UI state on Main dispatcher
+                    withContext(Dispatchers.Main) {
+                        autoAgentDebugInfo = "Error loading AutoAgent debug info: ${e.message}"
+                    }
                 }
             }
         } else {
@@ -1317,12 +1345,17 @@ fun DebugDialog(
             ) {
                 Button(
                     onClick = {
-                        scope.launch {
-                            isLoadingLogs = true
-                            logcatLogs = readLogcatLogs(300)
+                        // Launch on IO dispatcher to avoid blocking main thread
+                        scope.launch(Dispatchers.IO) {
+                            // Update loading state on Main dispatcher
+                            withContext(Dispatchers.Main) {
+                                isLoadingLogs = true
+                            }
                             
-                            // Refresh system info
-                            try {
+                            val logs = readLogcatLogs(300)
+                            
+                            // Refresh system info (already on IO dispatcher)
+                            val finalSystemInfo = try {
                                 val workspaceDir = File(workspaceRoot)
                                 val systemInfoBuilder = StringBuilder()
                                 
@@ -1362,17 +1395,27 @@ fun DebugDialog(
                                     // Ignore
                                 }
                                 
-                                systemInfo = systemInfoBuilder.toString()
+                                systemInfoBuilder.toString()
                             } catch (e: Exception) {
-                                systemInfo = "Error: ${e.message}"
+                                "Error: ${e.message}"
                             }
                             
-                            // Refresh test info
-                            try {
+                            // Update all UI state on Main dispatcher
+                            withContext(Dispatchers.Main) {
+                                logcatLogs = logs
+                                systemInfo = finalSystemInfo
+                                isLoadingLogs = false
+                            }
+                            
+                            // Refresh test info (already on IO dispatcher)
+                            // Access messages safely on Main dispatcher to avoid snapshot lock issues
+                            val finalTestInfoRefresh = try {
+                                val messagesSnapshot = withContext(Dispatchers.Main) { messages }
+                                val logsSnapshot = withContext(Dispatchers.Main) { logcatLogs }
                                 val testInfoBuilder = StringBuilder()
-                                val toolCalls = messages.filter { !it.isUser && it.text.contains("Tool") }
-                                val toolResults = messages.filter { !it.isUser && (it.text.contains("completed") || it.text.contains("Error")) }
-                                val testCommands = messages.filter { !it.isUser && (it.text.contains("test") || it.text.contains("npm test") || it.text.contains("pytest") || it.text.contains("cargo test") || it.text.contains("go test") || it.text.contains("mvn test") || it.text.contains("gradle test")) }
+                                val toolCalls = messagesSnapshot.filter { !it.isUser && it.text.contains("Tool") }
+                                val toolResults = messagesSnapshot.filter { !it.isUser && (it.text.contains("completed") || it.text.contains("Error")) }
+                                val testCommands = messagesSnapshot.filter { !it.isUser && (it.text.contains("test") || it.text.contains("npm test") || it.text.contains("pytest") || it.text.contains("cargo test") || it.text.contains("go test") || it.text.contains("mvn test") || it.text.contains("gradle test")) }
                                 
                                 testInfoBuilder.appendLine("Tool Calls: ${toolCalls.size}")
                                 testInfoBuilder.appendLine("Tool Results: ${toolResults.size}")
@@ -1392,10 +1435,10 @@ fun DebugDialog(
                                 testInfoBuilder.appendLine("  - write: $writeCalls")
                                 testInfoBuilder.appendLine("  - todos: $todosCalls")
                                 
-                                val codeDebugAttempts = messages.count { !it.isUser && (it.text.contains("Code error detected") || it.text.contains("debugging code")) }
-                                val codeFixes = messages.count { !it.isUser && (it.text.contains("Code fix applied") || it.text.contains("Fixed __dirname")) }
-                                val fallbackAttempts = messages.count { !it.isUser && (it.text.contains("Fallback") || it.text.contains("fallback")) }
-                                val esModuleFixes = messages.count { !it.isUser && (it.text.contains("ES Module") || it.text.contains("type: \"module\"")) }
+                                val codeDebugAttempts = messagesSnapshot.count { !it.isUser && (it.text.contains("Code error detected") || it.text.contains("debugging code")) }
+                                val codeFixes = messagesSnapshot.count { !it.isUser && (it.text.contains("Code fix applied") || it.text.contains("Fixed __dirname")) }
+                                val fallbackAttempts = messagesSnapshot.count { !it.isUser && (it.text.contains("Fallback") || it.text.contains("fallback")) }
+                                val esModuleFixes = messagesSnapshot.count { !it.isUser && (it.text.contains("ES Module") || it.text.contains("type: \"module\"")) }
                                 
                                 testInfoBuilder.appendLine()
                                 testInfoBuilder.appendLine("Code Debugging:")
@@ -1404,7 +1447,7 @@ fun DebugDialog(
                                 testInfoBuilder.appendLine("  - ES Module Fixes: $esModuleFixes")
                                 testInfoBuilder.appendLine("  - Fallback Attempts: $fallbackAttempts")
                                 
-                                val errors = messages.filter { !it.isUser && (it.text.contains("Error") || it.text.contains("error") || it.text.contains("failed") || it.text.contains("Failed")) }
+                                val errors = messagesSnapshot.filter { !it.isUser && (it.text.contains("Error") || it.text.contains("error") || it.text.contains("failed") || it.text.contains("Failed")) }
                                 val codeErrors = errors.count { it.text.contains("SyntaxError") || it.text.contains("TypeError") || it.text.contains("ReferenceError") || it.text.contains("ImportError") }
                                 val commandErrors = errors.count { it.text.contains("command not found") || it.text.contains("Exit code") || it.text.contains("127") }
                                 val dependencyErrors = errors.count { it.text.contains("module not found") || it.text.contains("package not found") || it.text.contains("Cannot find module") }
@@ -1426,8 +1469,8 @@ fun DebugDialog(
                                     testInfoBuilder.appendLine("Success Rate: $successRate% ($successfulTools/$totalTools)")
                                 }
                                 
-                                val apiCalls = logcatLogs?.split("\n")?.count { it.contains("makeApiCall") } ?: 0
-                                val apiSuccess = logcatLogs?.split("\n")?.count { it.contains("makeApiCall") && it.contains("Response code: 200") } ?: 0
+                                val apiCalls = logsSnapshot?.split("\n")?.count { it.contains("makeApiCall") } ?: 0
+                                val apiSuccess = logsSnapshot?.split("\n")?.count { it.contains("makeApiCall") && it.contains("Response code: 200") } ?: 0
                                 if (apiCalls > 0) {
                                     val apiSuccessRate = (apiSuccess * 100.0 / apiCalls).toInt()
                                     testInfoBuilder.appendLine()
@@ -1465,12 +1508,16 @@ fun DebugDialog(
                                     }
                                 }
                                 
-                                testInfo = testInfoBuilder.toString()
+                                testInfoBuilder.toString()
                             } catch (e: Exception) {
-                                testInfo = "Error: ${e.message}"
+                                "Error: ${e.message}"
                             }
                             
-                            isLoadingLogs = false
+                            // Update UI state on Main dispatcher
+                            withContext(Dispatchers.Main) {
+                                testInfo = finalTestInfoRefresh
+                                isLoadingLogs = false
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f)
@@ -1944,15 +1991,20 @@ fun AgentScreen(
                                     previousJob?.cancel()
                                     
                                     // Send to Gemini API with tools
-                                    val job = scope.launch {
+                                    // Launch on IO dispatcher to avoid blocking main thread
+                                    val job = scope.launch(Dispatchers.IO) {
                                         android.util.Log.d("AgentScreen", "Starting message send for: ${prompt.take(50)}...")
-                                        val loadingMessage = AgentMessage(
-                                            text = "Thinking...",
-                                            isUser = false,
-                                            timestamp = System.currentTimeMillis()
-                                        )
-                                        messages = messages + loadingMessage
-                                        currentResponseText = ""
+                                        
+                                        // Update UI state on main dispatcher
+                                        withContext(Dispatchers.Main) {
+                                            val loadingMessage = AgentMessage(
+                                                text = "Thinking...",
+                                                isUser = false,
+                                                timestamp = System.currentTimeMillis()
+                                            )
+                                            messages = messages + loadingMessage
+                                            currentResponseText = ""
+                                        }
                                         
                                         try {
                                             android.util.Log.d("AgentScreen", "Creating stream, useOllama: $useOllama")
@@ -1960,95 +2012,117 @@ fun AgentScreen(
                                                 (aiClient as OllamaClient).sendMessageStream(
                                                     userMessage = prompt,
                                                     onChunk = { chunk ->
-                                                        currentResponseText += chunk
-                                                        val currentMessages = if (messages.isNotEmpty()) messages.dropLast(1) else messages
-                                                        messages = currentMessages + AgentMessage(
-                                                            text = currentResponseText,
-                                                            isUser = false,
-                                                            timestamp = System.currentTimeMillis()
-                                                        )
+                                                        // Update UI state on main dispatcher
+                                                        withContext(Dispatchers.Main) {
+                                                            currentResponseText += chunk
+                                                            val currentMessages = if (messages.isNotEmpty()) messages.dropLast(1) else messages
+                                                            messages = currentMessages + AgentMessage(
+                                                                text = currentResponseText,
+                                                                isUser = false,
+                                                                timestamp = System.currentTimeMillis()
+                                                            )
+                                                        }
                                                     },
                                                     onToolCall = { functionCall ->
-                                                        val toolMessage = AgentMessage(
-                                                            text = "🔧 Calling tool: ${functionCall.name}",
-                                                            isUser = false,
-                                                            timestamp = System.currentTimeMillis()
-                                                        )
-                                                        messages = messages + toolMessage
+                                                        // Update UI state on main dispatcher
+                                                        withContext(Dispatchers.Main) {
+                                                            val toolMessage = AgentMessage(
+                                                                text = "🔧 Calling tool: ${functionCall.name}",
+                                                                isUser = false,
+                                                                timestamp = System.currentTimeMillis()
+                                                            )
+                                                            messages = messages + toolMessage
+                                                        }
                                                     },
                                                     onToolResult = { toolName, args ->
-                                                        val resultMessage = AgentMessage(
-                                                            text = "✅ Tool '$toolName' completed",
-                                                            isUser = false,
-                                                            timestamp = System.currentTimeMillis()
-                                                        )
-                                                        messages = messages + resultMessage
+                                                        // Update UI state on main dispatcher
+                                                        withContext(Dispatchers.Main) {
+                                                            val resultMessage = AgentMessage(
+                                                                text = "✅ Tool '$toolName' completed",
+                                                                isUser = false,
+                                                                timestamp = System.currentTimeMillis()
+                                                            )
+                                                            messages = messages + resultMessage
+                                                        }
                                                     }
                                                 )
                                             } else {
                                                 (aiClient as GeminiClient).sendMessageStream(
                                                     userMessage = prompt,
                                                     onChunk = { chunk ->
-                                                        currentResponseText += chunk
-                                                        val currentMessages = if (messages.isNotEmpty()) messages.dropLast(1) else messages
-                                                        messages = currentMessages + AgentMessage(
-                                                            text = currentResponseText,
-                                                            isUser = false,
-                                                            timestamp = System.currentTimeMillis()
-                                                        )
+                                                        // Update UI state on main dispatcher
+                                                        withContext(Dispatchers.Main) {
+                                                            currentResponseText += chunk
+                                                            val currentMessages = if (messages.isNotEmpty()) messages.dropLast(1) else messages
+                                                            messages = currentMessages + AgentMessage(
+                                                                text = currentResponseText,
+                                                                isUser = false,
+                                                                timestamp = System.currentTimeMillis()
+                                                            )
+                                                        }
                                                     },
                                                     onToolCall = { functionCall ->
-                                                        val toolMessage = AgentMessage(
-                                                            text = "🔧 Calling tool: ${functionCall.name}",
-                                                            isUser = false,
-                                                            timestamp = System.currentTimeMillis()
-                                                        )
-                                                        messages = messages + toolMessage
+                                                        // Update UI state on main dispatcher
+                                                        withContext(Dispatchers.Main) {
+                                                            val toolMessage = AgentMessage(
+                                                                text = "🔧 Calling tool: ${functionCall.name}",
+                                                                isUser = false,
+                                                                timestamp = System.currentTimeMillis()
+                                                            )
+                                                            messages = messages + toolMessage
+                                                        }
                                                     },
                                                     onToolResult = { toolName, args ->
-                                                        val resultMessage = AgentMessage(
-                                                            text = "✅ Tool '$toolName' completed",
-                                                            isUser = false,
-                                                            timestamp = System.currentTimeMillis()
-                                                        )
-                                                        messages = messages + resultMessage
+                                                        // Update UI state on main dispatcher
+                                                        withContext(Dispatchers.Main) {
+                                                            val resultMessage = AgentMessage(
+                                                                text = "✅ Tool '$toolName' completed",
+                                                                isUser = false,
+                                                                timestamp = System.currentTimeMillis()
+                                                            )
+                                                            messages = messages + resultMessage
+                                                        }
                                                     }
                                                 )
                                             }
                                             
-                                            // Collect stream events
+                                            // Collect stream events on IO dispatcher
                                             android.util.Log.d("AgentScreen", "Starting to collect stream events")
                                             val currentJob = coroutineContext[Job]
                                             try {
                                                 android.util.Log.d("AgentScreen", "About to start stream.collect")
                                                 // Collect on IO dispatcher to avoid blocking main thread
-                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                                    stream.collect { event ->
+                                                stream.collect { event ->
                                                     android.util.Log.d("AgentScreen", "Stream collect lambda called, job active: ${currentJob?.isActive}")
                                                     
                                                     try {
                                                         android.util.Log.d("AgentScreen", "Received stream event: ${event.javaClass.simpleName}")
+                                                        // All state updates must happen on Main dispatcher to avoid Compose snapshot lock issues
                                                         when (event) {
                                                             is GeminiStreamEvent.Chunk -> {
-                                                                currentResponseText += event.text
-                                                                val currentMessages = if (messages.isNotEmpty()) messages.dropLast(1) else messages
-                                                                messages = currentMessages + AgentMessage(
-                                                                    text = currentResponseText,
-                                                                    isUser = false,
-                                                                    timestamp = System.currentTimeMillis()
-                                                                )
+                                                                withContext(Dispatchers.Main) {
+                                                                    currentResponseText += event.text
+                                                                    val currentMessages = if (messages.isNotEmpty()) messages.dropLast(1) else messages
+                                                                    messages = currentMessages + AgentMessage(
+                                                                        text = currentResponseText,
+                                                                        isUser = false,
+                                                                        timestamp = System.currentTimeMillis()
+                                                                    )
+                                                                }
                                                             }
                                                             is GeminiStreamEvent.ToolCall -> {
                                                                 // Store tool call args in queue for file diff extraction
                                                                 if (event.functionCall.name == "edit" || event.functionCall.name == "write_file") {
                                                                     toolCallQueue.add(Pair(event.functionCall.name, event.functionCall.args))
                                                                 }
-                                                                val toolMessage = AgentMessage(
-                                                                    text = "🔧 Calling tool: ${event.functionCall.name}",
-                                                                    isUser = false,
-                                                                    timestamp = System.currentTimeMillis()
-                                                                )
-                                                                messages = messages + toolMessage
+                                                                withContext(Dispatchers.Main) {
+                                                                    val toolMessage = AgentMessage(
+                                                                        text = "🔧 Calling tool: ${event.functionCall.name}",
+                                                                        isUser = false,
+                                                                        timestamp = System.currentTimeMillis()
+                                                                    )
+                                                                    messages = messages + toolMessage
+                                                                }
                                                             }
                                                             is GeminiStreamEvent.ToolResult -> {
                                                                 // Try to extract file diff from tool result
@@ -2062,73 +2136,84 @@ fun AgentScreen(
                                                                 
                                                                 val fileDiff = parseFileDiffFromToolResult(event.toolName, event.result, toolArgs)
                                                                 
-                                                                val resultMessage = AgentMessage(
-                                                                    text = "✅ Tool '${event.toolName}' completed: ${event.result.returnDisplay}",
-                                                                    isUser = false,
-                                                                    timestamp = System.currentTimeMillis(),
-                                                                    fileDiff = fileDiff
-                                                                )
-                                                                messages = messages + resultMessage
+                                                                withContext(Dispatchers.Main) {
+                                                                    val resultMessage = AgentMessage(
+                                                                        text = "✅ Tool '${event.toolName}' completed: ${event.result.returnDisplay}",
+                                                                        isUser = false,
+                                                                        timestamp = System.currentTimeMillis(),
+                                                                        fileDiff = fileDiff
+                                                                    )
+                                                                    messages = messages + resultMessage
+                                                                }
                                                             }
                                                             is GeminiStreamEvent.Error -> {
-                                                                val errorMessage = AgentMessage(
-                                                                    text = "❌ Error: ${event.message}",
-                                                                    isUser = false,
-                                                                    timestamp = System.currentTimeMillis()
-                                                                )
-                                                                messages = if (messages.isNotEmpty()) messages.dropLast(1) + errorMessage else messages + errorMessage
+                                                                withContext(Dispatchers.Main) {
+                                                                    val errorMessage = AgentMessage(
+                                                                        text = "❌ Error: ${event.message}",
+                                                                        isUser = false,
+                                                                        timestamp = System.currentTimeMillis()
+                                                                    )
+                                                                    messages = if (messages.isNotEmpty()) messages.dropLast(1) + errorMessage else messages + errorMessage
+                                                                }
                                                             }
                                                             is GeminiStreamEvent.KeysExhausted -> {
-                                                                lastFailedPrompt = prompt
-                                                                showKeysExhaustedDialog = true
-                                                                val exhaustedMessage = AgentMessage(
-                                                                    text = "⚠️ Keys are exhausted\n\nAll API keys are rate limited. Use 'Wait and Retry' to retry after a delay.",
-                                                                    isUser = false,
-                                                                    timestamp = System.currentTimeMillis()
-                                                                )
-                                                                messages = if (messages.isNotEmpty()) messages.dropLast(1) + exhaustedMessage else messages + exhaustedMessage
+                                                                withContext(Dispatchers.Main) {
+                                                                    lastFailedPrompt = prompt
+                                                                    showKeysExhaustedDialog = true
+                                                                    val exhaustedMessage = AgentMessage(
+                                                                        text = "⚠️ Keys are exhausted\n\nAll API keys are rate limited. Use 'Wait and Retry' to retry after a delay.",
+                                                                        isUser = false,
+                                                                        timestamp = System.currentTimeMillis()
+                                                                    )
+                                                                    messages = if (messages.isNotEmpty()) messages.dropLast(1) + exhaustedMessage else messages + exhaustedMessage
+                                                                }
                                                             }
                                                             is GeminiStreamEvent.Done -> {
                                                                 android.util.Log.d("AgentScreen", "Stream completed (Done event)")
-                                                                // Final cleanup: ensure loading message is replaced with final response if there's any text
-                                                                if (currentResponseText.isNotEmpty() && messages.isNotEmpty()) {
-                                                                    try {
-                                                                        val lastMessage = messages.last()
-                                                                        // Only replace if it's still the loading message or empty
-                                                                        if (lastMessage.text == "Thinking..." || lastMessage.text.isEmpty()) {
-                                                                            val currentMessages = messages.dropLast(1)
-                                                                            messages = currentMessages + AgentMessage(
-                                                                                text = currentResponseText,
-                                                                                isUser = false,
-                                                                                timestamp = System.currentTimeMillis()
-                                                                            )
+                                                                withContext(Dispatchers.Main) {
+                                                                    // Final cleanup: ensure loading message is replaced with final response if there's any text
+                                                                    if (currentResponseText.isNotEmpty() && messages.isNotEmpty()) {
+                                                                        try {
+                                                                            val lastMessage = messages.last()
+                                                                            // Only replace if it's still the loading message or empty
+                                                                            if (lastMessage.text == "Thinking..." || lastMessage.text.isEmpty()) {
+                                                                                val currentMessages = messages.dropLast(1)
+                                                                                messages = currentMessages + AgentMessage(
+                                                                                    text = currentResponseText,
+                                                                                    isUser = false,
+                                                                                    timestamp = System.currentTimeMillis()
+                                                                                )
+                                                                            }
+                                                                        } catch (e: Exception) {
+                                                                            android.util.Log.e("AgentScreen", "Error in Done event cleanup", e)
                                                                         }
-                                                                    } catch (e: Exception) {
-                                                                        android.util.Log.e("AgentScreen", "Error in Done event cleanup", e)
                                                                     }
+                                                                    // Reset currentResponseText for next message
+                                                                    currentResponseText = ""
                                                                 }
-                                                                // Reset currentResponseText for next message
-                                                                currentResponseText = ""
                                                             }
                                                         }
                                                     } catch (e: Exception) {
                                                         android.util.Log.e("AgentScreen", "Error processing stream event", e)
                                                         // Emit error message but don't crash
-                                                        val errorMessage = AgentMessage(
-                                                            text = "❌ Error processing event: ${e.message ?: "Unknown error"}",
-                                                            isUser = false,
-                                                            timestamp = System.currentTimeMillis()
-                                                        )
-                                                        messages = if (messages.isNotEmpty()) messages.dropLast(1) + errorMessage else messages + errorMessage
+                                                        withContext(Dispatchers.Main) {
+                                                            val errorMessage = AgentMessage(
+                                                                text = "❌ Error processing event: ${e.message ?: "Unknown error"}",
+                                                                isUser = false,
+                                                                timestamp = System.currentTimeMillis()
+                                                            )
+                                                            messages = if (messages.isNotEmpty()) messages.dropLast(1) + errorMessage else messages + errorMessage
+                                                        }
                                                     }
-                                                    } // closes collect lambda
-                                                } // closes withContext
+                                                } // closes collect lambda
                                             } catch (e: kotlinx.coroutines.CancellationException) {
                                                 android.util.Log.d("AgentScreen", "Stream collection cancelled: ${e.message}")
                                                 android.util.Log.d("AgentScreen", "Cancellation stack trace", e)
-                                                // Clean up loading message for cancellations
-                                                if (messages.isNotEmpty() && messages.last().text == "Thinking...") {
-                                                    messages = messages.dropLast(1)
+                                                // Clean up loading message for cancellations on Main dispatcher
+                                                withContext(Dispatchers.Main) {
+                                                    if (messages.isNotEmpty() && messages.last().text == "Thinking...") {
+                                                        messages = messages.dropLast(1)
+                                                    }
                                                 }
                                                 throw e
                                             } catch (e: Exception) {
@@ -2137,14 +2222,16 @@ fun AgentScreen(
                                                 throw e
                                             }
                                             android.util.Log.d("AgentScreen", "Finished collecting stream events")
-                                            currentAgentJob = null
-                                            // Final safety check: ensure loading message is cleaned up
-                                            try {
-                                                if (currentResponseText.isNotEmpty() && messages.isNotEmpty()) {
-                                                    val lastMessage = messages.last()
-                                                    if (lastMessage.text == "Thinking..." || lastMessage.text.isEmpty()) {
-                                                        val currentMessages = messages.dropLast(1)
-                                                        messages = currentMessages + AgentMessage(
+                                            
+                                            // Final safety check: ensure loading message is cleaned up on Main dispatcher
+                                            withContext(Dispatchers.Main) {
+                                                currentAgentJob = null
+                                                try {
+                                                    if (currentResponseText.isNotEmpty() && messages.isNotEmpty()) {
+                                                        val lastMessage = messages.last()
+                                                        if (lastMessage.text == "Thinking..." || lastMessage.text.isEmpty()) {
+                                                            val currentMessages = messages.dropLast(1)
+                                                            messages = currentMessages + AgentMessage(
                                                             text = currentResponseText,
                                                             isUser = false,
                                                             timestamp = System.currentTimeMillis()
@@ -2157,33 +2244,40 @@ fun AgentScreen(
                                             }
                                         } catch (e: KeysExhaustedException) {
                                             android.util.Log.e("AgentScreen", "KeysExhaustedException caught", e)
-                                            lastFailedPrompt = prompt
-                                            showKeysExhaustedDialog = true
-                                            val exhaustedMessage = AgentMessage(
-                                                text = "⚠️ Keys are exhausted\n\nAll API keys are rate limited. Use 'Wait and Retry' to retry after a delay.",
-                                                isUser = false,
-                                                timestamp = System.currentTimeMillis()
-                                            )
-                                            messages = messages.dropLast(1) + exhaustedMessage
+                                            withContext(Dispatchers.Main) {
+                                                lastFailedPrompt = prompt
+                                                showKeysExhaustedDialog = true
+                                                val exhaustedMessage = AgentMessage(
+                                                    text = "⚠️ Keys are exhausted\n\nAll API keys are rate limited. Use 'Wait and Retry' to retry after a delay.",
+                                                    isUser = false,
+                                                    timestamp = System.currentTimeMillis()
+                                                )
+                                                messages = if (messages.isNotEmpty()) messages.dropLast(1) + exhaustedMessage else messages + exhaustedMessage
+                                            }
                                         } catch (e: kotlinx.coroutines.CancellationException) {
                                             android.util.Log.d("AgentScreen", "Message send cancelled: ${e.message}")
                                             android.util.Log.d("AgentScreen", "Cancellation cause", e)
-                                            // Clean up loading message
-                                            if (messages.isNotEmpty() && messages.last().text == "Thinking...") {
-                                                messages = messages.dropLast(1)
+                                            // Clean up loading message on Main dispatcher
+                                            withContext(Dispatchers.Main) {
+                                                if (messages.isNotEmpty() && messages.last().text == "Thinking...") {
+                                                    messages = messages.dropLast(1)
+                                                }
+                                                currentAgentJob = null
                                             }
                                         } catch (e: Exception) {
                                             android.util.Log.e("AgentScreen", "Exception caught in message send", e)
                                             android.util.Log.e("AgentScreen", "Exception type: ${e.javaClass.simpleName}")
                                             android.util.Log.e("AgentScreen", "Exception message: ${e.message}")
-                                            val errorMessage = AgentMessage(
-                                                text = "❌ Error: ${e.message ?: "Unknown error"}",
-                                                isUser = false,
-                                                timestamp = System.currentTimeMillis()
-                                            )
-                                            messages = messages.dropLast(1) + errorMessage
-                                        } finally {
-                                            currentAgentJob = null
+                                            // Update UI state on Main dispatcher
+                                            withContext(Dispatchers.Main) {
+                                                val errorMessage = AgentMessage(
+                                                    text = "❌ Error: ${e.message ?: "Unknown error"}",
+                                                    isUser = false,
+                                                    timestamp = System.currentTimeMillis()
+                                                )
+                                                messages = if (messages.isNotEmpty()) messages.dropLast(1) + errorMessage else messages + errorMessage
+                                                currentAgentJob = null
+                                            }
                                         }
                                     }
                                     // Store job reference immediately after launching
