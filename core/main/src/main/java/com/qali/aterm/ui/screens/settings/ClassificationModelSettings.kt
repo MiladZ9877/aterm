@@ -38,10 +38,18 @@ fun ClassificationModelSettings() {
         models = ClassificationModelManager.getAvailableModels()
         selectedModel = ClassificationModelManager.getSelectedModel()
         // Set AutoAgent model name from selected model if not already set
+        // This also ensures the database is created
         selectedModel?.let { model ->
             val currentAutoAgentModel = ClassificationModelManager.getAutoAgentModelName()
             if (currentAutoAgentModel == "aterm-offline" || currentAutoAgentModel.isEmpty()) {
                 ClassificationModelManager.setAutoAgentModelName(model.name)
+                // Ensure database is created for this model name
+                scope.launch(Dispatchers.IO) {
+                    val modelName = ClassificationModelManager.getAutoAgentModelName()
+                    com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
+                    com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
+                    com.qali.aterm.autogent.AutoAgentLearningService.initialize()
+                }
             }
         }
     }
@@ -155,9 +163,17 @@ fun ClassificationModelSettings() {
                             ClassificationModelManager.setSelectedModel(model.id)
                             selectedModel = ClassificationModelManager.getSelectedModel()
                             // Set AutoAgent model name to match selected classification model
+                            // This also ensures the database is created for this model name
                             ClassificationModelManager.setAutoAgentModelName(model.name)
-                            // Mark model as ready if file exists
+                            // Initialize AutoAgent services with the new model name
                             scope.launch(Dispatchers.IO) {
+                                // Ensure database is created
+                                val modelName = ClassificationModelManager.getAutoAgentModelName()
+                                com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
+                                com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
+                                com.qali.aterm.autogent.AutoAgentLearningService.initialize()
+                                
+                                // Mark model as ready if file exists
                                 val filePath = ClassificationModelManager.getModelFilePath(model.id)
                                 if (filePath != null) {
                                     val file = File(filePath)
@@ -191,9 +207,17 @@ fun ClassificationModelSettings() {
                             ClassificationModelManager.setSelectedModel(model.id)
                             selectedModel = ClassificationModelManager.getSelectedModel()
                             // Set AutoAgent model name to match selected classification model
+                            // This also ensures the database is created for this model name
                             ClassificationModelManager.setAutoAgentModelName(model.name)
-                            // Mark model as ready if file exists
+                            // Initialize AutoAgent services with the new model name
                             scope.launch(Dispatchers.IO) {
+                                // Ensure database is created
+                                val modelName = ClassificationModelManager.getAutoAgentModelName()
+                                com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
+                                com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
+                                com.qali.aterm.autogent.AutoAgentLearningService.initialize()
+                                
+                                // Mark model as ready if file exists
                                 val filePath = ClassificationModelManager.getModelFilePath(model.id)
                                 if (filePath != null) {
                                     val file = File(filePath)
@@ -230,9 +254,17 @@ fun ClassificationModelSettings() {
                             ClassificationModelManager.setSelectedModel(model.id)
                             selectedModel = ClassificationModelManager.getSelectedModel()
                             // Set AutoAgent model name to match selected classification model
+                            // This also ensures the database is created for this model name
                             ClassificationModelManager.setAutoAgentModelName(model.name)
-                            // Mark model as ready if file exists
+                            // Initialize AutoAgent services with the new model name
                             scope.launch(Dispatchers.IO) {
+                                // Ensure database is created
+                                val modelName = ClassificationModelManager.getAutoAgentModelName()
+                                com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
+                                com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
+                                com.qali.aterm.autogent.AutoAgentLearningService.initialize()
+                                
+                                // Mark model as ready if file exists
                                 val filePath = ClassificationModelManager.getModelFilePath(model.id)
                                 if (filePath != null) {
                                     val file = File(filePath)
@@ -273,6 +305,16 @@ fun ClassificationModelSettings() {
             onAdd = { model ->
                 scope.launch(Dispatchers.IO) {
                     if (ClassificationModelManager.addCustomModel(model)) {
+                        // Set AutoAgent model name to match the new model
+                        // This also ensures the database is created for this model name
+                        ClassificationModelManager.setAutoAgentModelName(model.name)
+                        
+                        // Ensure database is created for this model name
+                        val modelName = ClassificationModelManager.getAutoAgentModelName()
+                        com.qali.aterm.autogent.LearningDatabase.getInstance(modelName)
+                        com.qali.aterm.autogent.AutoAgentProvider.initialize(modelName)
+                        com.qali.aterm.autogent.AutoAgentLearningService.initialize()
+                        
                         // If model has a file path, verify it exists and mark as ready
                         if (model.filePath != null) {
                             val file = File(model.filePath)

@@ -130,8 +130,16 @@ object AutoAgentProvider {
             initialize(modelName)
             AutoAgentLogger.debug("AutoAgentProvider", "Initialized with model", mapOf("modelName" to modelName))
             
-            // Search learned data for relevant content
-            val relevantData = searchRelevantKnowledge(userMessage)
+            // Analyze user prompt using text classifier
+            val promptAnalysis = PromptAnalyzer.analyzePrompt(userMessage)
+            AutoAgentLogger.info("AutoAgentProvider", "Prompt analyzed", mapOf(
+                "intent" to promptAnalysis.intent.name,
+                "frameworkType" to (promptAnalysis.frameworkType ?: "none"),
+                "fileTypes" to promptAnalysis.fileTypes.joinToString(", ")
+            ))
+            
+            // Search learned data for relevant content (including prompt pattern matching)
+            val relevantData = searchRelevantKnowledge(userMessage, promptAnalysis)
             AutoAgentLogger.info("AutoAgentProvider", "Searched relevant knowledge", mapOf(
                 "codeSnippets" to (relevantData[LearnedDataType.CODE_SNIPPET]?.size ?: 0),
                 "apiUsage" to (relevantData[LearnedDataType.API_USAGE]?.size ?: 0),
@@ -148,10 +156,10 @@ object AutoAgentProvider {
             }
             
             // Build context from learned data
-            val context = buildContextFromLearnedData(relevantData, userMessage)
+            val context = buildContextFromLearnedData(relevantData, userMessage, promptAnalysis)
             
-            // Generate response based on learned patterns
-            val response = generateFromLearnedPatterns(context, userMessage, relevantData)
+            // Generate response based on learned patterns and metadata
+            val response = generateFromLearnedPatterns(context, userMessage, relevantData, promptAnalysis)
             
             // Stream the response
             AutoAgentLogger.info("AutoAgentProvider", "Generating response", mapOf("responseLength" to response.length))
@@ -171,9 +179,12 @@ object AutoAgentProvider {
     }
     
     /**
-     * Search for relevant knowledge based on user message
+     * Search for relevant knowledge based on user message and prompt analysis
      */
-    private suspend fun searchRelevantKnowledge(userMessage: String): Map<String, List<LearnedDataEntry>> = withContext(Dispatchers.IO) {
+    private suspend fun searchRelevantKnowledge(
+        userMessage: String,
+        promptAnalysis: PromptAnalysis
+    ): Map<String, List<LearnedDataEntry>> = withContext(Dispatchers.IO) {
         // Extract keywords from user message
         val keywords = extractKeywords(userMessage)
         
@@ -184,7 +195,8 @@ object AutoAgentProvider {
             LearnedDataType.CODE_SNIPPET,
             LearnedDataType.API_USAGE,
             LearnedDataType.FIX_PATCH,
-            LearnedDataType.METADATA_TRANSFORMATION
+            LearnedDataType.METADATA_TRANSFORMATION,
+            "framework_knowledge" // Include framework knowledge
         )
         
         types.forEach { type ->
@@ -192,6 +204,18 @@ object AutoAgentProvider {
             keywords.forEach { keyword ->
                 val results = database.searchLearnedData(keyword, type, 10)
                 relevantData.getOrPut(type) { mutableListOf() }.addAll(results)
+            }
+            
+            // Search by prompt pattern for better matching
+            if (promptAnalysis.promptPattern.isNotEmpty()) {
+                val patternResults = database.searchByPromptPattern(promptAnalysis.promptPattern, type, 5)
+                relevantData.getOrPut(type) { mutableListOf() }.addAll(patternResults)
+            }
+            
+            // Search by framework type if available
+            if (promptAnalysis.frameworkType != null) {
+                val frameworkResults = database.searchByFrameworkType(promptAnalysis.frameworkType, type, 5)
+                relevantData.getOrPut(type) { mutableListOf() }.addAll(frameworkResults)
             }
             
             // Get entries filtered by user prompt relevance (especially for metadata)
@@ -229,19 +253,34 @@ object AutoAgentProvider {
     }
     
     /**
-     * Build context from learned data
+     * Build context from learned data including framework knowledge
      */
     private fun buildContextFromLearnedData(
         relevantData: Map<String, List<LearnedDataEntry>>,
-        userMessage: String
+        userMessage: String,
+        promptAnalysis: PromptAnalysis
     ): String {
         val context = StringBuilder()
         
-        context.append("Based on learned knowledge, here's relevant information:\n\n")
+        context.append("Based on learned knowledge and framework patterns, here's relevant information:\n\n")
+        
+        // Add framework knowledge first (high priority)
+        if (promptAnalysis.frameworkType != null) {
+            relevantData["framework_knowledge"]?.filter { 
+                it.metadata?.contains(promptAnalysis.frameworkType) == true || 
+                it.content.contains(promptAnalysis.frameworkType, ignoreCase = true)
+            }?.take(3)?.forEach { entry ->
+                context.append("// Framework knowledge (${promptAnalysis.frameworkType}):\n")
+                context.append("${entry.content}\n\n")
+            }
+        }
         
         // Add code snippets
         relevantData[LearnedDataType.CODE_SNIPPET]?.take(5)?.forEach { entry ->
             context.append("// Learned code snippet (score: ${entry.positiveScore}):\n")
+            if (entry.metadata?.contains("import") == true) {
+                context.append("// Imports: ${entry.metadata}\n")
+            }
             context.append("${entry.content}\n\n")
         }
         
@@ -263,20 +302,21 @@ object AutoAgentProvider {
     }
     
     /**
-     * Generate response from learned patterns
+     * Generate response from learned patterns using metadata
      */
     private fun generateFromLearnedPatterns(
         context: String,
         userMessage: String,
-        relevantData: Map<String, List<LearnedDataEntry>>
+        relevantData: Map<String, List<LearnedDataEntry>>,
+        promptAnalysis: PromptAnalysis
     ): String {
         val response = StringBuilder()
         
-        // Analyze user intent
-        val intent = analyzeIntent(userMessage)
+        // Use intent from prompt analysis
+        val intent = promptAnalysis.intent
         
         when (intent) {
-            Intent.ANSWER_QUESTION -> {
+            com.qali.aterm.autogent.Intent.ANSWER_QUESTION -> {
                 // Search for learned Q&A pairs
                 val qaEntries = relevantData[LearnedDataType.METADATA_TRANSFORMATION]?.filter { entry ->
                     entry.metadata?.contains("\"question\"") == true && entry.metadata?.contains("\"answer\"") == true
@@ -325,17 +365,39 @@ object AutoAgentProvider {
                     }
                 }
             }
-            Intent.CREATE_CODE -> {
-                // Find best matching code snippet
+            com.qali.aterm.autogent.Intent.CREATE_CODE -> {
+                // Find best matching code snippet or framework knowledge
                 val bestMatch = relevantData[LearnedDataType.CODE_SNIPPET]?.firstOrNull()
+                    ?: relevantData["framework_knowledge"]?.firstOrNull()
+                
                 if (bestMatch != null) {
-                    response.append("Based on learned patterns, here's a solution:\n\n")
-                    response.append(adaptCodeToRequest(bestMatch.content, userMessage))
+                    response.append("Based on learned patterns and framework knowledge, here's a solution:\n\n")
+                    
+                    // Add imports if available
+                    if (promptAnalysis.importPatterns != null) {
+                        response.append("// Required imports:\n")
+                        promptAnalysis.importPatterns.split(", ").forEach { imp ->
+                            response.append("// $imp\n")
+                        }
+                        response.append("\n")
+                    }
+                    
+                    // Adapt code to request with metadata
+                    response.append(adaptCodeToRequest(bestMatch.content, userMessage, promptAnalysis))
+                    
+                    // Add event handlers if relevant
+                    if (promptAnalysis.eventHandlerPatterns != null && promptAnalysis.frameworkType in listOf("HTML", "JavaScript")) {
+                        response.append("\n// Event handlers: ${promptAnalysis.eventHandlerPatterns}\n")
+                    }
                 } else {
-                    response.append("I don't have learned code for this specific request yet.")
+                    response.append("I don't have learned code for this specific request yet. Using framework knowledge:\n\n")
+                    // Fallback to framework knowledge
+                    relevantData["framework_knowledge"]?.firstOrNull()?.let { framework ->
+                        response.append(framework.content)
+                    } ?: response.append("No framework knowledge available for this request.")
                 }
             }
-            Intent.FIX_CODE -> {
+            com.qali.aterm.autogent.Intent.FIX_CODE -> {
                 // Find relevant fixes by keywords
                 val keywords = extractKeywords(userMessage)
                 val fixes = database.getFixesByKeywords(keywords, 5)
@@ -364,7 +426,7 @@ object AutoAgentProvider {
                     }
                 }
             }
-            Intent.USE_API -> {
+            com.qali.aterm.autogent.Intent.USE_API -> {
                 // Find API usage patterns
                 val apiPatterns = relevantData[LearnedDataType.API_USAGE]?.take(3)
                 if (apiPatterns != null && apiPatterns.isNotEmpty()) {
@@ -376,7 +438,7 @@ object AutoAgentProvider {
                     response.append("I don't have learned API patterns for this yet.")
                 }
             }
-            Intent.GENERAL -> {
+            com.qali.aterm.autogent.Intent.GENERAL -> {
                 // General response combining all types
                 response.append(context)
                 response.append("\n\nBased on the learned knowledge above, here's my response:\n")
@@ -387,30 +449,36 @@ object AutoAgentProvider {
         return response.toString()
     }
     
-    /**
-     * Analyze user intent
-     */
-    private fun analyzeIntent(message: String): Intent {
-        val lower = message.lowercase()
-        val questionWords = listOf("what", "how", "why", "when", "where", "which", "who", "does", "do", "did", "will", "would", "should", "can", "could")
-        val isQuestion = message.trim().endsWith("?") || questionWords.any { lower.contains(it) }
-        
-        return when {
-            isQuestion -> Intent.ANSWER_QUESTION
-            lower.contains("create") || lower.contains("write") || lower.contains("generate") || lower.contains("implement") -> Intent.CREATE_CODE
-            lower.contains("fix") || lower.contains("error") || lower.contains("bug") || lower.contains("issue") -> Intent.FIX_CODE
-            lower.contains("api") || lower.contains("call") || lower.contains("request") -> Intent.USE_API
-            else -> Intent.GENERAL
-        }
-    }
+    // Note: analyzeIntent is no longer used - PromptAnalyzer handles intent extraction
     
     /**
-     * Adapt learned code to user request
+     * Adapt learned code to user request using metadata
      */
-    private fun adaptCodeToRequest(learnedCode: String, request: String): String {
-        // Simple adaptation - can be enhanced with more sophisticated pattern matching
-        // For now, return the learned code with a note
-        return "$learnedCode\n\n// Adapted from learned knowledge"
+    private fun adaptCodeToRequest(
+        learnedCode: String,
+        request: String,
+        promptAnalysis: PromptAnalysis
+    ): String {
+        var adaptedCode = learnedCode
+        
+        // Replace placeholders with metadata if available
+        promptAnalysis.metadata["file_names"]?.let { fileNames ->
+            if (fileNames is List<*>) {
+                fileNames.firstOrNull()?.let { fileName ->
+                    adaptedCode = adaptedCode.replace("{file}", fileName.toString())
+                }
+            }
+        }
+        
+        promptAnalysis.metadata["function_names"]?.let { functionNames ->
+            if (functionNames is List<*>) {
+                functionNames.firstOrNull()?.let { functionName ->
+                    adaptedCode = adaptedCode.replace("{function}", functionName.toString())
+                }
+            }
+        }
+        
+        return "$adaptedCode\n\n// Adapted from learned knowledge and framework patterns"
     }
     
     /**

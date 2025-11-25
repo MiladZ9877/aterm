@@ -264,12 +264,27 @@ object AutoAgentLearningService {
             "confidence" to confidence
         ))
         
+        // Analyze user prompt if available
+        val promptAnalysis = if (task.userPrompt != null) {
+            PromptAnalyzer.analyzePrompt(task.userPrompt)
+        } else {
+            null
+        }
+        
+        // Extract import patterns and event handlers from code
+        val importPatterns = extractImportPatterns(task.code)
+        val eventHandlerPatterns = extractEventHandlerPatterns(task.code)
+        
         // For metadata transformation, learn based on user prompt relevance
         val metadataJson = if (classification == LearnedDataType.METADATA_TRANSFORMATION && task.userPrompt != null) {
             // Store metadata with user prompt for relevance learning
             val metadataMap = (task.metadata ?: emptyMap()).toMutableMap()
             metadataMap["user_prompt"] = task.userPrompt
             metadataMap["prompt_relevance"] = calculatePromptRelevance(task.code, task.userPrompt)
+            if (promptAnalysis != null) {
+                metadataMap["intent"] = promptAnalysis.intent.name
+                metadataMap["file_types"] = promptAnalysis.fileTypes.joinToString(",")
+            }
             metadataMap.entries.joinToString(", ") { "${it.key}=${it.value}" }
         } else {
             task.metadata?.let { map ->
@@ -283,7 +298,12 @@ object AutoAgentLearningService {
             source = task.source,
             metadata = metadataJson,
             incrementScore = true,
-            userPrompt = task.userPrompt
+            userPrompt = task.userPrompt,
+            promptPattern = promptAnalysis?.promptPattern,
+            frameworkType = promptAnalysis?.frameworkType,
+            importPatterns = importPatterns,
+            eventHandlerPatterns = eventHandlerPatterns,
+            codeTemplate = generateCodeTemplate(task.code, promptAnalysis)
         )
         
         _learningEvents.emit(
@@ -307,6 +327,87 @@ object AutoAgentLearningService {
             (matchingWords.size.toFloat() / promptWords.size).coerceIn(0f, 1f)
         } else {
             0.5f
+        }
+    }
+    
+    /**
+     * Extract import patterns from code
+     */
+    private fun extractImportPatterns(code: String): String? {
+        val imports = mutableListOf<String>()
+        
+        // Extract import statements
+        val importRegex = Regex("""(?:import|require|from)\s+["']?([^"'\s]+)["']?""", Regex.IGNORE_CASE or Regex.MULTILINE)
+        val matches = importRegex.findAll(code)
+        matches.forEach { match ->
+            imports.add(match.value.trim())
+        }
+        
+        return if (imports.isNotEmpty()) {
+            imports.distinct().joinToString(", ")
+        } else {
+            null
+        }
+    }
+    
+    /**
+     * Extract event handler patterns from code
+     */
+    private fun extractEventHandlerPatterns(code: String): String? {
+        val handlers = mutableListOf<String>()
+        
+        // Extract event handlers
+        val handlerRegex = Regex("""(?:on|handle)(?:click|change|submit|load|focus|blur|mouse|key|input|change)\w*""", Regex.IGNORE_CASE or Regex.MULTILINE)
+        val matches = handlerRegex.findAll(code)
+        matches.forEach { match ->
+            handlers.add(match.value.lowercase())
+        }
+        
+        // Also check for addEventListener
+        val listenerRegex = Regex("""addEventListener\s*\(\s*["']([^"']+)["']""", Regex.IGNORE_CASE or Regex.MULTILINE)
+        val listenerMatches = listenerRegex.findAll(code)
+        listenerMatches.forEach { match ->
+            handlers.add("addEventListener:${match.groupValues[1]}")
+        }
+        
+        return if (handlers.isNotEmpty()) {
+            handlers.distinct().joinToString(", ")
+        } else {
+            null
+        }
+    }
+    
+    /**
+     * Generate code template from code and prompt analysis
+     */
+    private fun generateCodeTemplate(code: String, promptAnalysis: PromptAnalysis?): String? {
+        if (promptAnalysis == null) return null
+        
+        // Create a template by replacing specific values with placeholders
+        var template = code
+        
+        // Replace file names with {file}
+        promptAnalysis.metadata["file_names"]?.let { fileNames ->
+            if (fileNames is List<*>) {
+                fileNames.forEach { fileName ->
+                    template = template.replace(fileName.toString(), "{file}", ignoreCase = true)
+                }
+            }
+        }
+        
+        // Replace function names with {function}
+        promptAnalysis.metadata["function_names"]?.let { functionNames ->
+            if (functionNames is List<*>) {
+                functionNames.forEach { functionName ->
+                    template = template.replace(functionName.toString(), "{function}", ignoreCase = true)
+                }
+            }
+        }
+        
+        return if (template != code) {
+            template
+        } else {
+            null
         }
     }
     

@@ -13,17 +13,22 @@ import java.io.File
  */
 class LearningDatabase private constructor(private val modelName: String = "aterm-offline") {
     companion object {
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2 // Incremented for schema changes
         
-        private const val TABLE_LEARNED_DATA = "learned_data"
-        private const val COL_ID = "id"
-        private const val COL_TYPE = "type"
-        private const val COL_CONTENT = "content"
-        private const val COL_POSITIVE_SCORE = "positive_score"
-        private const val COL_SOURCE = "source"
-        private const val COL_TIMESTAMP = "timestamp"
-        private const val COL_METADATA = "metadata"
-        private const val COL_USER_PROMPT = "user_prompt" // For metadata generation relevance
+        const val TABLE_LEARNED_DATA = "learned_data"
+        const val COL_ID = "id"
+        const val COL_TYPE = "type"
+        const val COL_CONTENT = "content"
+        const val COL_POSITIVE_SCORE = "positive_score"
+        const val COL_SOURCE = "source"
+        const val COL_TIMESTAMP = "timestamp"
+        const val COL_METADATA = "metadata"
+        const val COL_USER_PROMPT = "user_prompt" // For metadata generation relevance
+        const val COL_PROMPT_PATTERN = "prompt_pattern" // Pattern extracted from user prompt
+        const val COL_FRAMEWORK_TYPE = "framework_type" // HTML, CSS, JS, Node.js, Python, Java, Kotlin, MVC, etc.
+        const val COL_IMPORT_PATTERNS = "import_patterns" // Learned import statements
+        const val COL_EVENT_HANDLER_PATTERNS = "event_handler_patterns" // Learned event handler names
+        const val COL_CODE_TEMPLATE = "code_template" // Template for code generation
         
         @Volatile
         private var INSTANCE: LearningDatabase? = null
@@ -31,7 +36,21 @@ class LearningDatabase private constructor(private val modelName: String = "ater
         fun getInstance(modelName: String? = null): LearningDatabase {
             val dbName = modelName ?: "aterm-offline"
             return INSTANCE?.takeIf { it.modelName == dbName } ?: synchronized(this) {
-                INSTANCE?.takeIf { it.modelName == dbName } ?: LearningDatabase(dbName).also { INSTANCE = it }
+                INSTANCE?.takeIf { it.modelName == dbName } ?: LearningDatabase(dbName).also { 
+                    INSTANCE = it
+                    // Force database creation by initializing it
+                    it.getWritableDatabase()
+                }
+            }
+        }
+        
+        /**
+         * Clear instance cache (used when resetting database)
+         */
+        fun clearInstance() {
+            synchronized(this) {
+                INSTANCE?.close()
+                INSTANCE = null
             }
         }
         
@@ -75,6 +94,27 @@ class LearningDatabase private constructor(private val modelName: String = "ater
                 
                 if (!tableExists) {
                     onCreate(database!!)
+                    // Initialize with framework knowledge after creating database
+                    FrameworkKnowledgeBase.initializeDatabase(database!!)
+                } else {
+                    // Check database version and upgrade if needed
+                    val versionCursor = database!!.rawQuery(
+                        "PRAGMA user_version",
+                        null
+                    )
+                    val currentVersion = if (versionCursor.moveToFirst()) {
+                        versionCursor.getInt(0)
+                    } else {
+                        0
+                    }
+                    versionCursor.close()
+                    
+                    if (currentVersion < DATABASE_VERSION) {
+                        onUpgrade(database!!, currentVersion, DATABASE_VERSION)
+                        database!!.execSQL("PRAGMA user_version = $DATABASE_VERSION")
+                        // Re-initialize framework knowledge after upgrade
+                        FrameworkKnowledgeBase.initializeDatabase(database!!)
+                    }
                 }
             }
         }
@@ -95,7 +135,12 @@ class LearningDatabase private constructor(private val modelName: String = "ater
                 $COL_SOURCE TEXT NOT NULL,
                 $COL_TIMESTAMP INTEGER NOT NULL,
                 $COL_METADATA TEXT,
-                $COL_USER_PROMPT TEXT
+                $COL_USER_PROMPT TEXT,
+                $COL_PROMPT_PATTERN TEXT,
+                $COL_FRAMEWORK_TYPE TEXT,
+                $COL_IMPORT_PATTERNS TEXT,
+                $COL_EVENT_HANDLER_PATTERNS TEXT,
+                $COL_CODE_TEMPLATE TEXT
             )
         """.trimIndent()
         
@@ -106,6 +151,27 @@ class LearningDatabase private constructor(private val modelName: String = "ater
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_content ON $TABLE_LEARNED_DATA($COL_CONTENT)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_score ON $TABLE_LEARNED_DATA($COL_POSITIVE_SCORE DESC)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_user_prompt ON $TABLE_LEARNED_DATA($COL_USER_PROMPT)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_prompt_pattern ON $TABLE_LEARNED_DATA($COL_PROMPT_PATTERN)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_framework_type ON $TABLE_LEARNED_DATA($COL_FRAMEWORK_TYPE)")
+    }
+    
+    private fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            // Add new columns for version 2
+            try {
+                db.execSQL("ALTER TABLE $TABLE_LEARNED_DATA ADD COLUMN $COL_PROMPT_PATTERN TEXT")
+                db.execSQL("ALTER TABLE $TABLE_LEARNED_DATA ADD COLUMN $COL_FRAMEWORK_TYPE TEXT")
+                db.execSQL("ALTER TABLE $TABLE_LEARNED_DATA ADD COLUMN $COL_IMPORT_PATTERNS TEXT")
+                db.execSQL("ALTER TABLE $TABLE_LEARNED_DATA ADD COLUMN $COL_EVENT_HANDLER_PATTERNS TEXT")
+                db.execSQL("ALTER TABLE $TABLE_LEARNED_DATA ADD COLUMN $COL_CODE_TEMPLATE TEXT")
+                
+                // Create new indexes
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_prompt_pattern ON $TABLE_LEARNED_DATA($COL_PROMPT_PATTERN)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_framework_type ON $TABLE_LEARNED_DATA($COL_FRAMEWORK_TYPE)")
+            } catch (e: Exception) {
+                android.util.Log.e("LearningDatabase", "Error upgrading database", e)
+            }
+        }
     }
     
     /**
@@ -117,7 +183,12 @@ class LearningDatabase private constructor(private val modelName: String = "ater
         source: String,
         metadata: String? = null,
         incrementScore: Boolean = true,
-        userPrompt: String? = null
+        userPrompt: String? = null,
+        promptPattern: String? = null,
+        frameworkType: String? = null,
+        importPatterns: String? = null,
+        eventHandlerPatterns: String? = null,
+        codeTemplate: String? = null
     ): Long {
         val db = getWritableDatabase()
         
@@ -147,6 +218,21 @@ class LearningDatabase private constructor(private val modelName: String = "ater
                 if (userPrompt != null) {
                     put(COL_USER_PROMPT, userPrompt)
                 }
+                if (promptPattern != null) {
+                    put(COL_PROMPT_PATTERN, promptPattern)
+                }
+                if (frameworkType != null) {
+                    put(COL_FRAMEWORK_TYPE, frameworkType)
+                }
+                if (importPatterns != null) {
+                    put(COL_IMPORT_PATTERNS, importPatterns)
+                }
+                if (eventHandlerPatterns != null) {
+                    put(COL_EVENT_HANDLER_PATTERNS, eventHandlerPatterns)
+                }
+                if (codeTemplate != null) {
+                    put(COL_CODE_TEMPLATE, codeTemplate)
+                }
             }
             
             db.update(TABLE_LEARNED_DATA, values, "$COL_ID = ?", arrayOf(id.toString()))
@@ -165,6 +251,21 @@ class LearningDatabase private constructor(private val modelName: String = "ater
                 }
                 if (userPrompt != null) {
                     put(COL_USER_PROMPT, userPrompt)
+                }
+                if (promptPattern != null) {
+                    put(COL_PROMPT_PATTERN, promptPattern)
+                }
+                if (frameworkType != null) {
+                    put(COL_FRAMEWORK_TYPE, frameworkType)
+                }
+                if (importPatterns != null) {
+                    put(COL_IMPORT_PATTERNS, importPatterns)
+                }
+                if (eventHandlerPatterns != null) {
+                    put(COL_EVENT_HANDLER_PATTERNS, eventHandlerPatterns)
+                }
+                if (codeTemplate != null) {
+                    put(COL_CODE_TEMPLATE, codeTemplate)
                 }
             }
             
@@ -309,8 +410,95 @@ class LearningDatabase private constructor(private val modelName: String = "ater
     }
     
     /**
-     * Search learned data by content similarity
+     * Search by prompt pattern for similarity matching
      */
+    fun searchByPromptPattern(pattern: String, type: String? = null, limit: Int = 20): List<LearnedDataEntry> {
+        val db = getReadableDatabase()
+        val entries = mutableListOf<LearnedDataEntry>()
+        
+        val selection = if (type != null) {
+            "$COL_PROMPT_PATTERN LIKE ? AND $COL_TYPE = ?"
+        } else {
+            "$COL_PROMPT_PATTERN LIKE ?"
+        }
+        val selectionArgs = if (type != null) {
+            arrayOf("%$pattern%", type)
+        } else {
+            arrayOf("%$pattern%")
+        }
+        
+        val cursor = db.query(
+            TABLE_LEARNED_DATA,
+            null,
+            selection,
+            selectionArgs,
+            null,
+            null,
+            "$COL_POSITIVE_SCORE DESC",
+            limit.toString()
+        )
+        
+        while (cursor.moveToNext()) {
+            entries.add(createLearnedDataEntry(cursor))
+        }
+        
+        cursor.close()
+        return entries
+    }
+    
+    /**
+     * Search by framework type
+     */
+    fun searchByFrameworkType(frameworkType: String, type: String? = null, limit: Int = 20): List<LearnedDataEntry> {
+        val db = getReadableDatabase()
+        val entries = mutableListOf<LearnedDataEntry>()
+        
+        val selection = if (type != null) {
+            "$COL_FRAMEWORK_TYPE = ? AND $COL_TYPE = ?"
+        } else {
+            "$COL_FRAMEWORK_TYPE = ?"
+        }
+        val selectionArgs = if (type != null) {
+            arrayOf(frameworkType, type)
+        } else {
+            arrayOf(frameworkType)
+        }
+        
+        val cursor = db.query(
+            TABLE_LEARNED_DATA,
+            null,
+            selection,
+            selectionArgs,
+            null,
+            null,
+            "$COL_POSITIVE_SCORE DESC",
+            limit.toString()
+        )
+        
+        while (cursor.moveToNext()) {
+            entries.add(createLearnedDataEntry(cursor))
+        }
+        
+        cursor.close()
+        return entries
+    }
+    
+    /**
+     * Helper to create LearnedDataEntry from cursor
+     */
+    private fun createLearnedDataEntry(cursor: android.database.Cursor): LearnedDataEntry {
+        return LearnedDataEntry(
+            id = cursor.getLong(cursor.getColumnIndexOrThrow(COL_ID)),
+            type = cursor.getString(cursor.getColumnIndexOrThrow(COL_TYPE)),
+            content = cursor.getString(cursor.getColumnIndexOrThrow(COL_CONTENT)),
+            positiveScore = cursor.getInt(cursor.getColumnIndexOrThrow(COL_POSITIVE_SCORE)),
+            source = cursor.getString(cursor.getColumnIndexOrThrow(COL_SOURCE)),
+            timestamp = cursor.getLong(cursor.getColumnIndexOrThrow(COL_TIMESTAMP)),
+            metadata = cursor.getStringOrNull(cursor.getColumnIndexOrThrow(COL_METADATA)),
+            userPrompt = cursor.getStringOrNull(cursor.getColumnIndexOrThrow(COL_USER_PROMPT))
+        )
+    }
+    
     fun searchLearnedData(query: String, type: String? = null, limit: Int = 50): List<LearnedDataEntry> {
         val db = getReadableDatabase()
         val entries = mutableListOf<LearnedDataEntry>()
@@ -404,6 +592,51 @@ class LearningDatabase private constructor(private val modelName: String = "ater
         }
         
         return result
+    }
+    
+    /**
+     * Clear all learned data from the database
+     * Returns true if successful, false otherwise
+     */
+    fun clearAllData(): Boolean {
+        return try {
+            val db = getWritableDatabase()
+            db.delete(TABLE_LEARNED_DATA, null, null)
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("LearningDatabase", "Error clearing database", e)
+            false
+        }
+    }
+    
+    /**
+     * Reset database by deleting the database file and recreating it
+     * Returns true if successful, false otherwise
+     */
+    fun resetDatabase(): Boolean {
+        return try {
+            // Close current database connection
+            database?.close()
+            database = null
+            
+            // Delete database file
+            val dbPath = getDatabasePath(modelName)
+            val dbFile = File(dbPath)
+            if (dbFile.exists()) {
+                dbFile.delete()
+            }
+            
+            // Clear instance so new database will be created on next getInstance()
+            clearInstance()
+            
+            // Force creation of new database
+            getWritableDatabase()
+            
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("LearningDatabase", "Error resetting database", e)
+            false
+        }
     }
     
     fun close() {
